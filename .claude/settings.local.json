@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm create *)",
+      "Bash(cmd /c \"node --version && npm --version\")",
+      "Bash(cmd /c \"where node\")",
+      "Bash(cmd /c \"where npm\")",
+      "Bash(cmd /c \"winget list node\")",
+      "Bash(cmd /c \"python --version\")",
+      "Bash(cmd /c \"C:\\\\ProgramData\\\\Anaconda2\\\\python.exe --version\")",
+      "Bash(cmd /c \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python310\\\\python.exe --version\")",
+      "Read(//c/Users/user/AppData/Local/Programs/Python//**)",
+      "Read(//c/ProgramData/Anaconda2//**)",
+      "mcp__Claude_Preview__preview_start"
+    ]
+  }
+}
