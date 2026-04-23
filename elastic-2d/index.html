@@ -319,7 +319,9 @@ const PRESETS = {
   custom:   { label:'커스텀',edgeC: 1e-4,   restC: 5e-4,  color:'#a3e635' }
 };
 const BG_EDGE_C = 2e-5;  // moderate background stiffness
-const BG_REST_C = 5e-5;  // background snaps back in ~0.2 s
+const BG_REST_C = 4e-4;  // background snaps back in ~1.2 s (was 5e-5 / ~0.2s —
+                         // too aggressive; edgeC differences were invisible
+                         // because rest-springs wiped out stretch instantly)
 
 // ═══════════════════════════════════════════════
 //  MESH GENERATOR (2D grid)
@@ -619,10 +621,12 @@ class Grabber2D {
     this.renderer   = renderer;
     this.camera     = camera;
     this.bodies     = bodies;
-    // Grab radius: 15% of shorter world dim → thick skin blob
-    // Max drag   : 40% of shorter world dim → realistic pull limit
-    this.grabRadius = Math.min(worldW, worldH) * 0.15;
-    this.maxDrag    = Math.min(worldW, worldH) * 0.40;
+    // Grab radius: 7% of shorter world dim → small "handle" so physics (edges + rest
+    // springs) propagate the deformation OUTSIDE the grab zone. Previously 15% meant
+    // ~40% of the mesh was pin-forced and edgeC differences were barely visible.
+    // Max drag  : 45% of shorter world dim → room for dramatic pulls.
+    this.grabRadius = Math.min(worldW, worldH) * 0.07;
+    this.maxDrag    = Math.min(worldW, worldH) * 0.45;
     this.active     = null;
     this._tmp = new THREE.Vector3();
 
@@ -860,9 +864,10 @@ overlayCanvas.addEventListener('pointerup', () => {
         const preset = PRESETS[key];
         let edgeC = preset.edgeC, restC = preset.restC;
         if (key === 'custom') {
-          const t = parseInt(customSlider.value) / 100;
-          edgeC = Math.pow(10, -5 + t * 1.7);
-          restC = edgeC * 4;
+          // 커스텀: 슬라이더 1-100 → edgeC(탄성), restC는 edgeC의 3배 (더 늘어나고 더 천천히 복원)
+          const s = parseInt(customSlider.value);
+          edgeC = sliderToEdgeC(s);
+          restC = sliderToRestC(Math.min(100, s + 10));  // 탄성보다 약간 느슨한 복원
         }
         appRegions.push({ cx: drawStart.u, cy: drawStart.v, r,
           edgeC, restC, color: preset.color, label: preset.label });
@@ -933,10 +938,11 @@ function redrawRegionCanvas() {
 }
 
 // ── Slider ↔ compliance conversion (log scale) ──────────────────────────────
-// edgeC : 1e-5 (stiff) … 5e-4 (very stretchy)   slider 0–100
-// restC : 5e-5 (fast)  … 3e-3 (very slow)        slider 0–100
-const _EL = Math.log10(1e-5), _EH = Math.log10(5e-4);   // edge log range
-const _RL = Math.log10(5e-5), _RH = Math.log10(3e-3);   // rest log range
+// edgeC : 5e-6 (near-rigid) … 5e-3 (extremely stretchy)   slider 0–100
+// restC : 5e-5 (fast snap)  … 1e-2 (very slow bounce)     slider 0–100
+// 범위를 넓혀 슬라이더 양 끝단이 극적으로 다른 촉감을 주도록 함
+const _EL = Math.log10(5e-6), _EH = Math.log10(5e-3);   // edge log range (1000×)
+const _RL = Math.log10(5e-5), _RH = Math.log10(1e-2);   // rest log range (200×)
 
 // s=0  → compliance 0  (완전 강체 — 잡히지 않음, 즉시 복원)
 // s=1+ → log scale 정상 매핑
@@ -1101,8 +1107,8 @@ function startSimulation(img) {
   } else {
     grabber.renderer    = renderer3;
     grabber.camera      = camera3;
-    grabber.grabRadius  = Math.min(worldW, worldH) * 0.15;
-    grabber.maxDrag     = Math.min(worldW, worldH) * 0.40;
+    grabber.grabRadius  = Math.min(worldW, worldH) * 0.07;
+    grabber.maxDrag     = Math.min(worldW, worldH) * 0.45;
     grabber.setBodies([softbody]);
   }
 
