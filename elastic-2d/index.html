@@ -59,6 +59,30 @@
       position: absolute; top: 0; left: 0;
       cursor: crosshair;
     }
+
+    /* ── Editor toolbar ── */
+    #editor-toolbar {
+      position: absolute; top: 12px; left: 50%;
+      transform: translateX(-50%);
+      display: flex; gap: 2px;
+      background: rgba(15,23,42,.88);
+      border: 1px solid #374151;
+      border-radius: 10px; padding: 4px;
+      backdrop-filter: blur(10px);
+      z-index: 20; user-select: none;
+    }
+    .tool-btn {
+      width: 38px; height: 38px;
+      background: transparent; border: none; border-radius: 7px;
+      color: #9ca3af; font-size: 1.15rem; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: background .15s, color .15s;
+    }
+    .tool-btn:hover { background: rgba(255,255,255,.08); color: #e5e7eb; }
+    .tool-btn.active { background: #6366f1; color: #fff; }
+    .tool-sep {
+      width: 1px; background: #374151; margin: 5px 2px;
+    }
     #editor-panel {
       width: 260px; min-width: 260px;
       background: #1f2937;
@@ -79,20 +103,34 @@
     }
     input[type=range] { padding: 4px 0; cursor: pointer; }
     .region-item {
-      display: flex; align-items: center; gap: 8px;
-      padding: 7px 8px; margin-bottom: 4px;
-      background: #111827; border-radius: 6px;
+      padding: 7px 8px; margin-bottom: 6px;
+      background: #111827; border-radius: 8px;
       font-size: 0.82rem;
+    }
+    .region-item-header {
+      display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
     }
     .region-dot {
       width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0;
     }
-    .region-item span { flex: 1; }
+    .region-item-header span { flex: 1; }
     .region-del {
       cursor: pointer; color: #6b7280; font-size: 1rem; line-height: 1;
       padding: 2px 4px; border-radius: 4px;
     }
     .region-del:hover { color: #ef4444; background: rgba(239,68,68,.1); }
+    /* per-region sliders */
+    .region-sliders { display: flex; flex-direction: column; gap: 4px; }
+    .rslider-row {
+      display: grid; grid-template-columns: 28px 1fr 26px;
+      align-items: center; gap: 6px;
+    }
+    .rslider-label { font-size: 0.7rem; color: #6b7280; }
+    .rslider-row input[type=range] {
+      width: 100%; padding: 2px 0; cursor: pointer;
+      accent-color: #6366f1;
+    }
+    .rslider-val { font-size: 0.68rem; color: #4b5563; text-align: right; }
     #regions-list { padding: 8px 16px; }
     #btn-start {
       margin: 16px; padding: 12px;
@@ -139,6 +177,31 @@
       position: fixed; inset: 0; pointer-events: none;
       opacity: .35;
     }
+
+    /* ── Simulation parameter panel (left side) ── */
+    #sim-params-panel {
+      position: fixed; left: 0; top: 0; bottom: 0;
+      width: 230px;
+      background: rgba(17,24,39,.94);
+      border-right: 1px solid #374151;
+      display: none; flex-direction: column;
+      overflow-y: auto;
+      backdrop-filter: blur(12px);
+      z-index: 30;
+    }
+    #sim-params-panel-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 16px;
+      border-bottom: 1px solid #374151;
+      font-size: .9rem; font-weight: 600;
+    }
+    #btn-close-params {
+      background: none; border: none; color: #6b7280;
+      cursor: pointer; font-size: 1.05rem; line-height: 1;
+      padding: 2px 4px; border-radius: 4px;
+    }
+    #btn-close-params:hover { color: #e5e7eb; background: rgba(255,255,255,.08); }
+    #sim-params-list { padding: 8px; }
   </style>
 </head>
 <body>
@@ -157,6 +220,11 @@
 <!-- ── 2. Region editor screen ───────────────── -->
 <div id="editor-screen">
   <div id="editor-canvas-wrap">
+    <!-- floating toolbar -->
+    <div id="editor-toolbar">
+      <button class="tool-btn active" id="tool-draw" title="그리기 (D)">✏️</button>
+      <button class="tool-btn"        id="tool-move" title="이동 (M)">🖐</button>
+    </div>
     <img id="editor-img" />
     <canvas id="region-canvas"></canvas>
     <canvas id="editor-overlay-canvas"></canvas>
@@ -200,11 +268,21 @@
 <div id="canvas-container"></div>
 <canvas id="region-overlay-sim"></canvas>
 
-<!-- ── 4. Simulation HUD ─────────────────────── -->
+<!-- ── 4a. Simulation parameter panel ────────── -->
+<div id="sim-params-panel">
+  <div id="sim-params-panel-header">
+    <span>파라미터 조절</span>
+    <button id="btn-close-params" title="닫기">✕</button>
+  </div>
+  <div id="sim-params-list"></div>
+</div>
+
+<!-- ── 4b. Simulation HUD ─────────────────────── -->
 <div id="sim-hud">
   <div class="hud-row">
     <button class="hud-btn" id="btn-edit-regions">영역 편집</button>
     <button class="hud-btn" id="btn-reset-sim">메시 초기화</button>
+    <button class="hud-btn" id="btn-params">파라미터</button>
   </div>
   <div class="hud-row">
     <button class="hud-btn active" id="btn-medium" data-substeps="10">Medium</button>
@@ -313,19 +391,17 @@ class SoftBody2D {
     this.edgeIds = meshData.edges;
     this.triIds  = meshData.tris;
 
+    // Store UV for real-time compliance refresh
+    this.imgUV = meshData.imgUV;
+
     // Per-vertex compliance from region definitions
     this.vEdgeC = new Float32Array(this.nV);
     this.vRestC = new Float32Array(this.nV);
-    const uv = meshData.imgUV;
-    for (let i = 0; i < this.nV; i++) {
-      const { edgeC, restC } = getVertexCompliance(uv[i*2], uv[i*2+1], regions);
-      this.vEdgeC[i] = edgeC;
-      this.vRestC[i] = restC;
-    }
+    this.invMass = new Float32Array(this.nV).fill(1.0);
+    this._applyCompliance(regions);   // sets vEdgeC, vRestC, invMass
 
     // Precompute rest lengths
     this.restLengths = this._computeRestLengths();
-    this.invMass     = new Float32Array(this.nV).fill(1.0);
 
     this.grabId = -1;
     this.grabOrigInvMass = 0;
@@ -398,9 +474,10 @@ class SoftBody2D {
   _solveRestSprings(sdt) {
     for (let i = 0; i < this.nV; i++) {
       if (this.invMass[i] === 0) continue;
-      const alpha  = this.vRestC[i] / (sdt * sdt);
-      const w      = this.invMass[i];
-      const factor = w / (w + alpha);        // 0 = no correction, 1 = full snap
+      // restC=0 → factor=1 → 즉시 원위치 (완전 강체)
+      const factor = this.vRestC[i] === 0
+        ? 1.0
+        : this.invMass[i] / (this.invMass[i] + this.vRestC[i] / (sdt * sdt));
       this.pos[i*3]   += factor * (this.rest[i*3]   - this.pos[i*3]);
       this.pos[i*3+1] += factor * (this.rest[i*3+1] - this.pos[i*3+1]);
     }
@@ -412,6 +489,26 @@ class SoftBody2D {
       this.vel[i*3]   = (this.pos[i*3]   - this.prevPos[i*3])   / sdt;
       this.vel[i*3+1] = (this.pos[i*3+1] - this.prevPos[i*3+1]) / sdt;
     }
+  }
+
+  // Internal: write vEdgeC/vRestC/invMass from a regions array.
+  // invMass=0 → rigid (edgeC=0), invMass=1 → normal.
+  // During an active grab some invMasses are 0 for grab-pinning; we
+  // must not clobber those, so refreshCompliance guards against it.
+  _applyCompliance(regions) {
+    for (let i = 0; i < this.nV; i++) {
+      const { edgeC, restC } = getVertexCompliance(
+        this.imgUV[i*2], this.imgUV[i*2+1], regions);
+      this.vEdgeC[i] = edgeC;
+      this.vRestC[i] = restC;
+      this.invMass[i] = (edgeC === 0) ? 0 : 1.0;
+    }
+  }
+
+  // Public: call whenever appRegions changes while simulation is running.
+  refreshCompliance(regions) {
+    if (this.grabActive) return;   // don't clobber grab-pinned invMasses
+    this._applyCompliance(regions);
   }
 
   _computeRestLengths() {
@@ -439,8 +536,21 @@ class SoftBody2D {
     this.grabCurrY   = gy;
     this.grabMaxDrag = maxDrag;
 
+    // If the grab centre lands on a rigid vertex, cancel the grab entirely.
+    // (Otherwise the radius would still pull the soft surrounding area.)
+    let minD2 = Infinity, nearestEdgeC = BG_EDGE_C;
+    for (let i = 0; i < this.nV; i++) {
+      const dx = this.pos[i*3] - gx, dy = this.pos[i*3+1] - gy;
+      const d2 = dx*dx + dy*dy;
+      if (d2 < minD2) { minD2 = d2; nearestEdgeC = this.vEdgeC[i]; }
+    }
+    if (nearestEdgeC === 0) return false;   // rigid region — don't grab
+
     const r2 = radius * radius;
     for (let i = 0; i < this.nV; i++) {
+      // invMass===0 → rigid (permanently fixed) or grabbed elsewhere → skip
+      if (this.invMass[i] === 0) continue;
+
       const dx = this.pos[i*3] - gx, dy = this.pos[i*3+1] - gy;
       const d2 = dx*dx + dy*dy;
       if (d2 <= r2) {
@@ -559,8 +669,9 @@ function getVertexCompliance(u, v, regions) {
   for (const r of regions) {
     const du = u - r.cx, dv = v - r.cy;
     if (du*du + dv*dv <= r.r*r.r) {
-      if (r.edgeC > edgeC) edgeC = r.edgeC;
-      if (r.restC > restC) restC = r.restC;
+      // 0(rigid)은 절대 우선 적용; 아니면 더 탄성적인(큰) 값 채택
+      edgeC = (r.edgeC === 0 || edgeC === 0) ? 0 : Math.max(edgeC, r.edgeC);
+      restC = (r.restC === 0 || restC === 0) ? 0 : Math.max(restC, r.restC);
     }
   }
   return { edgeC, restC };
@@ -628,23 +739,58 @@ customSlider.addEventListener('input', () => {
   customVal.textContent = customSlider.value;
 });
 
+// ── Tool state ──────────────────────────────────
+let currentTool = 'draw';   // 'draw' | 'move'
+
+function setTool(t) {
+  currentTool = t;
+  document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tool-' + t).classList.add('active');
+  overlayCanvas.style.cursor = t === 'draw' ? 'crosshair' : 'default';
+  // cancel any in-progress operation when switching
+  drawing = false;
+  movingIdx = -1;
+  redrawEditorOverlay();
+}
+document.getElementById('tool-draw').addEventListener('click', () => setTool('draw'));
+document.getElementById('tool-move').addEventListener('click', () => setTool('move'));
+// Keyboard shortcuts D / M
+window.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (e.key === 'd' || e.key === 'D') setTool('draw');
+  if (e.key === 'm' || e.key === 'M') setTool('move');
+});
+
+// ── Draw-tool state ──────────────────────────────
 let drawing = false, drawStart = null, drawCurrent = null;
 
-function getImageRect() {
-  const wrap = document.getElementById('editor-canvas-wrap');
-  const wR   = wrap.getBoundingClientRect();
-  const img  = editorImg;
-  const iAsp = img.naturalWidth / img.naturalHeight;
-  const wAsp = wR.width / wR.height;
-  let dW, dH, ox, oy;
-  if (iAsp > wAsp) {
-    dW = wR.width; dH = wR.width / iAsp;
-    ox = 0;        oy = (wR.height - dH) / 2;
-  } else {
-    dH = wR.height; dW = wR.height * iAsp;
-    oy = 0;         ox = (wR.width - dW) / 2;
+// ── Move-tool state ──────────────────────────────
+let movingIdx   = -1;       // index of region being dragged
+let moveStartUV = null;     // UV at pointer-down
+let moveOrigCX  = 0;        // region.cx before drag began
+let moveOrigCY  = 0;        // region.cy before drag began
+
+// returns index of topmost region that contains UV (u,v), or -1
+function findRegionAt(u, v) {
+  for (let i = appRegions.length - 1; i >= 0; i--) {
+    const r = appRegions[i];
+    const du = u - r.cx, dv = v - r.cy;
+    if (du*du + dv*dv <= r.r*r.r) return i;
   }
-  return { ox, oy, dW, dH };
+  return -1;
+}
+
+function getImageRect() {
+  // Read the ACTUAL rendered image rect from the browser layout.
+  // This is always correct regardless of aspect ratio or display scaling.
+  const wR = document.getElementById('editor-canvas-wrap').getBoundingClientRect();
+  const iR = editorImg.getBoundingClientRect();
+  return {
+    ox: iR.left - wR.left,
+    oy: iR.top  - wR.top,
+    dW: iR.width,
+    dH: iR.height
+  };
 }
 
 function clientToImgUV(cx, cy) {
@@ -658,73 +804,146 @@ function clientToImgUV(cx, cy) {
 }
 
 overlayCanvas.addEventListener('pointerdown', e => {
-  drawing = true;
-  drawStart = clientToImgUV(e.clientX, e.clientY);
-  drawCurrent = { ...drawStart };
   overlayCanvas.setPointerCapture(e.pointerId);
-});
-overlayCanvas.addEventListener('pointermove', e => {
-  if (!drawing) return;
-  drawCurrent = clientToImgUV(e.clientX, e.clientY);
-  redrawEditorOverlay();
-});
-overlayCanvas.addEventListener('pointerup', () => {
-  if (!drawing) return;
-  drawing = false;
-  if (drawStart && drawCurrent) {
-    const du = drawCurrent.u - drawStart.u;
-    const dv = drawCurrent.v - drawStart.v;
-    const r  = Math.sqrt(du*du + dv*dv);
-    if (r > 0.01) {
-      const key   = partSelect.value;
-      const preset = PRESETS[key];
-      let edgeC = preset.edgeC, restC = preset.restC;
-      if (key === 'custom') {
-        // log scale: slider 1→100 maps to edgeC 1e-5→3e-4, restC = edgeC*4
-        const t = parseInt(customSlider.value) / 100;
-        edgeC = Math.pow(10, -5 + t * 1.7);   // 1e-5 … ~2.5e-4
-        restC = edgeC * 4;                     // restC ≈ 4× edgeC
-      }
-      appRegions.push({ cx: drawStart.u, cy: drawStart.v, r,
-        edgeC, restC, color: preset.color, label: preset.label });
-      renderRegionsList();
-      redrawRegionCanvas();
+  const uv = clientToImgUV(e.clientX, e.clientY);
+
+  if (currentTool === 'draw') {
+    drawing    = true;
+    drawStart  = uv;
+    drawCurrent = { ...uv };
+
+  } else if (currentTool === 'move') {
+    const idx = findRegionAt(uv.u, uv.v);
+    if (idx >= 0) {
+      movingIdx    = idx;
+      moveStartUV  = uv;
+      moveOrigCX   = appRegions[idx].cx;
+      moveOrigCY   = appRegions[idx].cy;
+      overlayCanvas.style.cursor = 'grabbing';
     }
   }
-  redrawEditorOverlay();
+});
+
+overlayCanvas.addEventListener('pointermove', e => {
+  const uv = clientToImgUV(e.clientX, e.clientY);
+
+  if (currentTool === 'draw') {
+    if (!drawing) return;
+    drawCurrent = uv;
+    redrawEditorOverlay();
+
+  } else if (currentTool === 'move') {
+    if (movingIdx >= 0) {
+      // drag: update region centre
+      appRegions[movingIdx].cx = moveOrigCX + (uv.u - moveStartUV.u);
+      appRegions[movingIdx].cy = moveOrigCY + (uv.v - moveStartUV.v);
+      redrawRegionCanvas();
+      redrawEditorOverlay();
+    } else {
+      // hover: change cursor when over a region
+      overlayCanvas.style.cursor =
+        findRegionAt(uv.u, uv.v) >= 0 ? 'grab' : 'default';
+    }
+  }
+});
+
+overlayCanvas.addEventListener('pointerup', () => {
+  if (currentTool === 'draw') {
+    if (!drawing) return;
+    drawing = false;
+    if (drawStart && drawCurrent) {
+      const du = drawCurrent.u - drawStart.u;
+      const dv = drawCurrent.v - drawStart.v;
+      const r  = Math.sqrt(du*du + dv*dv);
+      if (r > 0.01) {
+        const key    = partSelect.value;
+        const preset = PRESETS[key];
+        let edgeC = preset.edgeC, restC = preset.restC;
+        if (key === 'custom') {
+          const t = parseInt(customSlider.value) / 100;
+          edgeC = Math.pow(10, -5 + t * 1.7);
+          restC = edgeC * 4;
+        }
+        appRegions.push({ cx: drawStart.u, cy: drawStart.v, r,
+          edgeC, restC, color: preset.color, label: preset.label });
+        renderRegionsList();
+        redrawRegionCanvas();
+      }
+    }
+    redrawEditorOverlay();
+
+  } else if (currentTool === 'move') {
+    movingIdx = -1;
+    moveStartUV = null;
+    overlayCanvas.style.cursor = 'default';
+    renderRegionsList();   // update list order if needed
+  }
 });
 
 function redrawEditorOverlay() {
   const ctx = overlayCanvas.getContext('2d');
   ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-  if (!drawing || !drawStart || !drawCurrent) return;
-  const { dW, dH } = getImageRect();
-  const du = drawCurrent.u - drawStart.u, dv = drawCurrent.v - drawStart.v;
-  const r  = Math.sqrt(du*du + dv*dv);
-  const key = partSelect.value;
-  const col = PRESETS[key].color;
-  ctx.beginPath();
-  ctx.arc(drawStart.u * dW, drawStart.v * dH, r * dW, 0, Math.PI*2);
-  ctx.strokeStyle = col; ctx.lineWidth = 2;
-  ctx.fillStyle = col + '33';
-  ctx.fill(); ctx.stroke();
+  const { ox, oy, dW, dH } = getImageRect();
+
+  // Draw tool: preview circle while dragging
+  if (currentTool === 'draw' && drawing && drawStart && drawCurrent) {
+    const du = drawCurrent.u - drawStart.u, dv = drawCurrent.v - drawStart.v;
+    const r  = Math.sqrt(du*du + dv*dv);
+    const col = PRESETS[partSelect.value].color;
+    const cx  = ox + drawStart.u * dW;
+    const cy  = oy + drawStart.v * dH;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, r * dW, r * dH, 0, 0, Math.PI*2);
+    ctx.strokeStyle = col; ctx.lineWidth = 2;
+    ctx.fillStyle   = col + '33';
+    ctx.fill(); ctx.stroke();
+  }
+
+  // Move tool: highlight the region being dragged
+  if (currentTool === 'move' && movingIdx >= 0) {
+    const reg = appRegions[movingIdx];
+    const cx  = ox + reg.cx * dW;
+    const cy  = oy + reg.cy * dH;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, reg.r * dW, reg.r * dH, 0, 0, Math.PI*2);
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth   = 2.5;
+    ctx.setLineDash([6, 3]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
 }
 
 function redrawRegionCanvas() {
   const ctx = regionCanvas.getContext('2d');
-  const { dW, dH } = getImageRect();
+  const { ox, oy, dW, dH } = getImageRect();
   ctx.clearRect(0, 0, regionCanvas.width, regionCanvas.height);
   for (const reg of appRegions) {
+    const cx = ox + reg.cx * dW;
+    const cy = oy + reg.cy * dH;
     ctx.beginPath();
-    ctx.arc(reg.cx * dW, reg.cy * dH, reg.r * dW, 0, Math.PI*2);
+    ctx.ellipse(cx, cy, reg.r * dW, reg.r * dH, 0, 0, Math.PI*2);
     ctx.strokeStyle = reg.color; ctx.lineWidth = 2;
     ctx.fillStyle   = reg.color + '30';
     ctx.fill(); ctx.stroke();
     ctx.fillStyle = reg.color;
     ctx.font = '12px Segoe UI';
-    ctx.fillText(reg.label, reg.cx * dW + reg.r * dW + 4, reg.cy * dH + 4);
+    ctx.fillText(reg.label, cx + reg.r * dW + 4, cy + 4);
   }
 }
+
+// ── Slider ↔ compliance conversion (log scale) ──────────────────────────────
+// edgeC : 1e-5 (stiff) … 5e-4 (very stretchy)   slider 0–100
+// restC : 5e-5 (fast)  … 3e-3 (very slow)        slider 0–100
+const _EL = Math.log10(1e-5), _EH = Math.log10(5e-4);   // edge log range
+const _RL = Math.log10(5e-5), _RH = Math.log10(3e-3);   // rest log range
+
+// s=0  → compliance 0  (완전 강체 — 잡히지 않음, 즉시 복원)
+// s=1+ → log scale 정상 매핑
+function edgeCToSlider(v) { if (v === 0) return 0; return Math.max(1, Math.round(((Math.log10(Math.max(v,1e-6)) - _EL) / (_EH - _EL)) * 100)); }
+function sliderToEdgeC(s) { return s === 0 ? 0 : Math.pow(10, _EL + (s / 100) * (_EH - _EL)); }
+function restCToSlider(v) { if (v === 0) return 0; return Math.max(1, Math.round(((Math.log10(Math.max(v,1e-6)) - _RL) / (_RH - _RL)) * 100)); }
+function sliderToRestC(s) { return s === 0 ? 0 : Math.pow(10, _RL + (s / 100) * (_RH - _RL)); }
 
 function renderRegionsList() {
   regionsList.innerHTML = '';
@@ -733,18 +952,57 @@ function renderRegionsList() {
     return;
   }
   appRegions.forEach((reg, idx) => {
+    const eVal = edgeCToSlider(reg.edgeC);
+    const rVal = restCToSlider(reg.restC);
+
     const div = document.createElement('div');
     div.className = 'region-item';
     div.innerHTML = `
-      <div class="region-dot" style="background:${reg.color}"></div>
-      <span>${reg.label}</span>
-      <span class="region-del" data-idx="${idx}">&#xd7;</span>`;
+      <div class="region-item-header">
+        <div class="region-dot" style="background:${reg.color}"></div>
+        <span>${reg.label}</span>
+        <span class="region-del" data-idx="${idx}">&#xd7;</span>
+      </div>
+      <div class="region-sliders">
+        <div class="rslider-row">
+          <span class="rslider-label">탄성</span>
+          <input type="range" class="r-edge-s" data-idx="${idx}"
+                 min="0" max="100" value="${eVal}" />
+          <span class="rslider-val r-edge-v">${eVal}</span>
+        </div>
+        <div class="rslider-row">
+          <span class="rslider-label">복원</span>
+          <input type="range" class="r-rest-s" data-idx="${idx}"
+                 min="0" max="100" value="${rVal}" />
+          <span class="rslider-val r-rest-v">${rVal}</span>
+        </div>
+      </div>`;
     regionsList.appendChild(div);
-  });
-  regionsList.querySelectorAll('.region-del').forEach(el => {
-    el.addEventListener('click', () => {
-      appRegions.splice(parseInt(el.dataset.idx), 1);
+
+    // delete
+    div.querySelector('.region-del').addEventListener('click', () => {
+      appRegions.splice(idx, 1);
       renderRegionsList(); redrawRegionCanvas();
+    });
+
+    // edge slider — updates appRegions AND the live softbody immediately
+    const edgeSlider = div.querySelector('.r-edge-s');
+    const edgeVal    = div.querySelector('.r-edge-v');
+    edgeSlider.addEventListener('input', () => {
+      const s = parseInt(edgeSlider.value);
+      edgeVal.textContent = s;
+      appRegions[idx].edgeC = sliderToEdgeC(s);
+      softbody?.refreshCompliance(appRegions);
+    });
+
+    // rest slider
+    const restSlider = div.querySelector('.r-rest-s');
+    const restVal    = div.querySelector('.r-rest-v');
+    restSlider.addEventListener('input', () => {
+      const s = parseInt(restSlider.value);
+      restVal.textContent = s;
+      appRegions[idx].restC = sliderToRestC(s);
+      softbody?.refreshCompliance(appRegions);
     });
   });
 }
@@ -792,6 +1050,9 @@ function startSimulation(img) {
   document.getElementById('canvas-container').style.display   = 'block';
   document.getElementById('sim-hud').style.display            = 'flex';
   document.getElementById('region-overlay-sim').style.display = '';
+  // 파라미터 패널은 닫은 상태로 시작
+  document.getElementById('sim-params-panel').style.display   = 'none';
+  document.getElementById('btn-params').classList.remove('active');
 
   const W = img.naturalWidth, H = img.naturalHeight;
   const aspect = W / H;
@@ -897,15 +1158,17 @@ function drawSimRegionOverlay(worldW, worldH) {
   for (const reg of appRegions) {
     const wc  = uvToWorld(reg.cx, reg.cy);
     const cp  = worldToCanvas(wc.x, wc.y);
-    // radius: reg.r is in UV units, convert to canvas pixels via worldW
-    const rPx = (reg.r * worldW / cW) * cvs.width;
+    // reg.r is in UV units — convert separately for x and y
+    // so the overlay ellipse matches the editor ellipse exactly
+    const rPxX = (reg.r * worldW / cW) * cvs.width;
+    const rPxY = (reg.r * worldH / cH) * cvs.height;
     ctx.beginPath();
-    ctx.arc(cp.px, cp.py, rPx, 0, Math.PI*2);
+    ctx.ellipse(cp.px, cp.py, rPxX, rPxY, 0, 0, Math.PI*2);
     ctx.strokeStyle = reg.color; ctx.lineWidth = 1.5;
     ctx.fillStyle   = reg.color + '18';
     ctx.fill(); ctx.stroke();
     ctx.fillStyle = reg.color + 'cc'; ctx.font = '12px Segoe UI';
-    ctx.fillText(reg.label, cp.px + rPx + 4, cp.py + 4);
+    ctx.fillText(reg.label, cp.px + rPxX + 4, cp.py + 4);
   }
 }
 
@@ -935,12 +1198,89 @@ function loop(now) {
 // ═══════════════════════════════════════════════
 //  HUD BUTTONS
 // ═══════════════════════════════════════════════
+// ═══════════════════════════════════════════════
+//  SIMULATION PARAMETER PANEL
+// ═══════════════════════════════════════════════
+function renderSimParamsList() {
+  const container = document.getElementById('sim-params-list');
+  container.innerHTML = '';
+  if (appRegions.length === 0) {
+    container.innerHTML =
+      '<p style="font-size:.78rem;color:#4b5563;padding:8px 4px">설정된 영역이 없습니다.<br>편집 화면에서 먼저 영역을 그려주세요.</p>';
+    return;
+  }
+  appRegions.forEach((reg, idx) => {
+    const eVal = edgeCToSlider(reg.edgeC);
+    const rVal = restCToSlider(reg.restC);
+    const div = document.createElement('div');
+    div.className = 'region-item';
+    div.innerHTML = `
+      <div class="region-item-header">
+        <div class="region-dot" style="background:${reg.color}"></div>
+        <span>${reg.label}</span>
+      </div>
+      <div class="region-sliders">
+        <div class="rslider-row">
+          <span class="rslider-label">탄성</span>
+          <input type="range" class="r-edge-s" min="0" max="100" value="${eVal}" />
+          <span class="rslider-val r-edge-v">${eVal}</span>
+        </div>
+        <div class="rslider-row">
+          <span class="rslider-label">복원</span>
+          <input type="range" class="r-rest-s" min="0" max="100" value="${rVal}" />
+          <span class="rslider-val r-rest-v">${rVal}</span>
+        </div>
+      </div>`;
+    container.appendChild(div);
+
+    const edgeSlider = div.querySelector('.r-edge-s');
+    const edgeVal    = div.querySelector('.r-edge-v');
+    edgeSlider.addEventListener('input', () => {
+      const s = parseInt(edgeSlider.value);
+      edgeVal.textContent = s;
+      appRegions[idx].edgeC = sliderToEdgeC(s);
+      softbody?.refreshCompliance(appRegions);
+    });
+
+    const restSlider = div.querySelector('.r-rest-s');
+    const restVal    = div.querySelector('.r-rest-v');
+    restSlider.addEventListener('input', () => {
+      const s = parseInt(restSlider.value);
+      restVal.textContent = s;
+      appRegions[idx].restC = sliderToRestC(s);
+      softbody?.refreshCompliance(appRegions);
+    });
+  });
+}
+
+document.getElementById('btn-params').addEventListener('click', () => {
+  const panel  = document.getElementById('sim-params-panel');
+  const btn    = document.getElementById('btn-params');
+  const isOpen = panel.style.display === 'flex';
+  if (isOpen) {
+    panel.style.display = 'none';
+    btn.classList.remove('active');
+  } else {
+    renderSimParamsList();
+    panel.style.display = 'flex';
+    btn.classList.add('active');
+  }
+});
+
+document.getElementById('btn-close-params').addEventListener('click', () => {
+  document.getElementById('sim-params-panel').style.display = 'none';
+  document.getElementById('btn-params').classList.remove('active');
+});
+
 document.getElementById('btn-edit-regions').addEventListener('click', () => {
   document.getElementById('canvas-container').style.display   = 'none';
   document.getElementById('sim-hud').style.display            = 'none';
   document.getElementById('region-overlay-sim').style.display = 'none';
+  document.getElementById('sim-params-panel').style.display   = 'none';
+  document.getElementById('btn-params').classList.remove('active');
   document.getElementById('editor-screen').style.display      = 'flex';
   setTimeout(resizeEditorCanvases, 50);
+  renderRegionsList();   // 슬라이더 값 최신화
 });
 
 document.getElementById('btn-reset-sim').addEventListener('click', () => {
@@ -962,6 +1302,7 @@ document.getElementById('btn-reset-editor').addEventListener('click', () => {
   document.getElementById('canvas-container').style.display   = 'none';
   document.getElementById('sim-hud').style.display            = 'none';
   document.getElementById('region-overlay-sim').style.display = 'none';
+  document.getElementById('sim-params-panel').style.display   = 'none';
   document.getElementById('upload-screen').style.display      = 'flex';
   appRegions = []; loadedImage = null;
   if (loadedImageUrl) { URL.revokeObjectURL(loadedImageUrl); loadedImageUrl = null; }
