@@ -556,7 +556,19 @@ class SoftBody2D {
       if (d2 <= r2) {
         const t = Math.sqrt(d2) / radius;
         // cosine falloff: 1 at centre, 0 at edge — smooth "blob" displacement
-        const w = Math.cos(t * Math.PI * 0.5);
+        const distW = Math.cos(t * Math.PI * 0.5);
+        // ── 탄성(edgeC) 슬라이더를 당김 크기에 직접 반영 ──────────────────
+        // 기존: 잡힌 영역은 모두 핀 고정되어 edgeC 효과가 눈에 안 보였음.
+        // 이제 정점이 얼마나 "당겨지는지"를 edgeC 로 스케일.
+        //   edgeC = BG_EDGE_C  → mult = 1  (기존 그대로)
+        //   edgeC > BG         → mult > 1  (더 늘어남)
+        //   edgeC < BG         → mult < 1  (덜 늘어남)
+        //   edgeC = 0          → mult = 0  (안 움직임; 기존 강체와 동일)
+        const stretchMult = this.vEdgeC[i] === 0
+          ? 0
+          : Math.min(2.0, Math.sqrt(this.vEdgeC[i] / BG_EDGE_C));
+        const w = distW * stretchMult;
+        if (w < 0.005) continue;   // 너무 뻣뻣해서 사실상 안 움직임
         this.grabData.push({
           id: i, weight: w,
           origX: this.pos[i*3], origY: this.pos[i*3+1],
