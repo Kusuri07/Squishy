@@ -77,11 +77,43 @@
       color: #9ca3af; font-size: 1.15rem; cursor: pointer;
       display: flex; align-items: center; justify-content: center;
       transition: background .15s, color .15s;
+      position: relative;
     }
     .tool-btn:hover { background: rgba(255,255,255,.08); color: #e5e7eb; }
     .tool-btn.active { background: #6366f1; color: #fff; }
     .tool-sep {
       width: 1px; background: #374151; margin: 5px 2px;
+    }
+    /* Shape palette popover */
+    #shape-palette {
+      position: absolute; top: 54px; left: 50%;
+      transform: translateX(-50%);
+      display: none;
+      grid-template-columns: repeat(5, 44px);
+      gap: 4px; padding: 8px;
+      background: rgba(15,23,42,.94);
+      border: 1px solid #374151;
+      border-radius: 10px;
+      backdrop-filter: blur(10px);
+      z-index: 21; user-select: none;
+    }
+    #shape-palette.open { display: grid; }
+    .shape-cell {
+      width: 44px; height: 44px;
+      background: #111827;
+      border: 1px solid #1f2937;
+      border-radius: 7px;
+      display: flex; align-items: center; justify-content: center;
+      color: #9ca3af; cursor: pointer;
+      transition: background .12s, border-color .12s, color .12s;
+    }
+    .shape-cell:hover { color: #e5e7eb; border-color: #6366f1; background: #1f2937; }
+    .shape-cell.active { border-color: #6366f1; color: #fff; background: rgba(99,102,241,.18); }
+    .shape-cell svg { width: 26px; height: 26px; }
+    #shape-caret {
+      position: absolute; right: 2px; bottom: 1px;
+      font-size: .6rem; color: #9ca3af; line-height: 1;
+      pointer-events: none;
     }
     #editor-panel {
       width: 260px; min-width: 260px;
@@ -235,8 +267,46 @@
   <div id="editor-canvas-wrap">
     <!-- floating toolbar -->
     <div id="editor-toolbar">
-      <button class="tool-btn active" id="tool-draw" title="그리기 (D)">✏️</button>
-      <button class="tool-btn"        id="tool-move" title="이동 (M)">🖐</button>
+      <button class="tool-btn active" id="tool-shape"   title="도형 (S)">
+        <span id="tool-shape-icon">●</span><span id="shape-caret">▾</span>
+      </button>
+      <button class="tool-btn"        id="tool-polygon" title="자유 다각형 (P)">⬟</button>
+      <div class="tool-sep"></div>
+      <button class="tool-btn"        id="tool-move"    title="이동 (M)">🖐</button>
+      <button class="tool-btn"        id="tool-edit"    title="점 편집 (E)">◈</button>
+    </div>
+    <!-- Shape palette popover (PowerPoint-style gallery) -->
+    <div id="shape-palette">
+      <div class="shape-cell active" data-preset="ellipse"   title="타원">
+        <svg viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="10" ry="7" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+      </div>
+      <div class="shape-cell" data-preset="rect" title="사각형">
+        <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+      </div>
+      <div class="shape-cell" data-preset="roundrect" title="둥근 사각형">
+        <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="4" ry="4" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+      </div>
+      <div class="shape-cell" data-preset="triangle" title="삼각형">
+        <svg viewBox="0 0 24 24"><polygon points="12,3 22,21 2,21" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+      </div>
+      <div class="shape-cell" data-preset="diamond" title="마름모">
+        <svg viewBox="0 0 24 24"><polygon points="12,2 22,12 12,22 2,12" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+      </div>
+      <div class="shape-cell" data-preset="pentagon" title="오각형">
+        <svg viewBox="0 0 24 24"><polygon points="12,2 22,10 18,22 6,22 2,10" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+      </div>
+      <div class="shape-cell" data-preset="hexagon" title="육각형">
+        <svg viewBox="0 0 24 24"><polygon points="7,3 17,3 22,12 17,21 7,21 2,12" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+      </div>
+      <div class="shape-cell" data-preset="star" title="별">
+        <svg viewBox="0 0 24 24"><polygon points="12,2 14.6,9 22,9.5 16.3,14 18.2,21 12,17 5.8,21 7.7,14 2,9.5 9.4,9" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+      </div>
+      <div class="shape-cell" data-preset="arrow" title="화살표">
+        <svg viewBox="0 0 24 24"><polygon points="2,9 14,9 14,4 22,12 14,20 14,15 2,15" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+      </div>
+      <div class="shape-cell" data-preset="heart" title="하트">
+        <svg viewBox="0 0 24 24"><path d="M12 21 C 4 14, 2 10, 6 6 C 9 3, 12 6, 12 8 C 12 6, 15 3, 18 6 C 22 10, 20 14, 12 21 Z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+      </div>
     </div>
     <img id="editor-img" />
     <canvas id="region-canvas"></canvas>
@@ -267,7 +337,16 @@
     </div>
 
     <div id="draw-hint">
-      이미지 위에서 드래그해서<br>원형 영역을 그려보세요
+      <b>●&nbsp;도형</b> &nbsp;클릭해 종류 선택 후 드래그<br>
+      <b>⬟&nbsp;자유 다각형</b> &nbsp;클릭해 점 추가, 더블클릭/Enter로 완료<br>
+      <b>🖐&nbsp;이동</b> &nbsp;도형을 끌어서 이동<br>
+      <b>◈&nbsp;점 편집</b> &nbsp;도형 선택 후:<br>
+      &nbsp;&nbsp;· 네모/원/다이아 = 앵커 (끌어 이동)<br>
+      &nbsp;&nbsp;· 파란 원 = 접선 핸들 (곡선 조정)<br>
+      &nbsp;&nbsp;· 세그먼트 더블클릭 = 앵커 추가<br>
+      &nbsp;&nbsp;· 앵커 더블클릭/Alt+클릭 = 타입 순환<br>
+      &nbsp;&nbsp;· 우클릭/Del = 앵커 삭제<br>
+      <span style="color:#6b7280">Esc: 선택/그리기 취소</span>
     </div>
 
     <div id="regions-list"></div>
@@ -718,13 +797,565 @@ class Grabber2D {
 }
 
 // ═══════════════════════════════════════════════
-//  REGION HELPERS
+//  REGION HELPERS (shape-agnostic: circle / rect / polygon)
 // ═══════════════════════════════════════════════
+// 모든 도형은 UV(0..1) 공간에 저장됨.
+//   circle : { shape:'circle',  cx, cy, r }
+//   rect   : { shape:'rect',    x, y, w, h }              // 좌상단 + 크기
+//   polygon: { shape:'polygon', points: [{u,v},...] }
+// shape 필드가 없으면 'circle' 로 취급 (이전 데이터 호환)
+
+// ─── Bezier path model ───────────────────────────────────────────────
+// reg.shape === 'path' 인 경우:
+//   reg.anchors = [{ u, v, hInU, hInV, hOutU, hOutV, type }]
+//   type: 'corner' | 'smooth' | 'symmetric'
+//   hIn / hOut 는 절대 UV 좌표
+//   reg.closed = true
+//   reg.preset = 'circle'|'ellipse'|'rect'|'roundrect'|'triangle'|'diamond'|
+//                'pentagon'|'hexagon'|'star'|'arrow'|'heart'|'custom'
+
+// Cached flattened polygon for containment; invalidated via reg._flatDirty = true
+function flattenPath(reg, samplesPerSeg = 14) {
+  if (reg._flat && !reg._flatDirty) return reg._flat;
+  const a = reg.anchors, n = a.length;
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const p0 = a[i], p1 = a[(i+1) % n];
+    const x0=p0.u, y0=p0.v, x1=p0.hOutU, y1=p0.hOutV;
+    const x2=p1.hInU, y2=p1.hInV, x3=p1.u, y3=p1.v;
+    for (let s = 0; s < samplesPerSeg; s++) {
+      const t = s / samplesPerSeg;
+      const mt = 1 - t;
+      const b0 = mt*mt*mt, b1 = 3*mt*mt*t, b2 = 3*mt*t*t, b3 = t*t*t;
+      out.push({
+        u: b0*x0 + b1*x1 + b2*x2 + b3*x3,
+        v: b0*y0 + b1*y1 + b2*y2 + b3*y3
+      });
+    }
+  }
+  reg._flat = out; reg._flatDirty = false;
+  return out;
+}
+
+function pointInPolygon(pts, u, v) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const ui = pts[i].u, vi = pts[i].v, uj = pts[j].u, vj = pts[j].v;
+    const hit = ((vi > v) !== (vj > v))
+      && (u < (uj - ui) * (v - vi) / (vj - vi + 1e-12) + ui);
+    if (hit) inside = !inside;
+  }
+  return inside;
+}
+
+function regionContains(reg, u, v) {
+  const s = reg.shape || 'circle';
+  if (s === 'path') {
+    return pointInPolygon(flattenPath(reg), u, v);
+  }
+  if (s === 'circle') {
+    const du = u - reg.cx, dv = v - reg.cy;
+    return du*du + dv*dv <= reg.r*reg.r;
+  }
+  if (s === 'rect') {
+    return u >= reg.x && u <= reg.x + reg.w
+        && v >= reg.y && v <= reg.y + reg.h;
+  }
+  if (s === 'polygon') {
+    const p = reg.points; if (!p || p.length < 3) return false;
+    return pointInPolygon(p, u, v);
+  }
+  return false;
+}
+
+function regionCenter(reg) {
+  const s = reg.shape || 'circle';
+  if (s === 'path') {
+    let su = 0, sv = 0;
+    for (const a of reg.anchors) { su += a.u; sv += a.v; }
+    const n = Math.max(1, reg.anchors.length);
+    return { u: su / n, v: sv / n };
+  }
+  if (s === 'circle') return { u: reg.cx, v: reg.cy };
+  if (s === 'rect')   return { u: reg.x + reg.w/2, v: reg.y + reg.h/2 };
+  if (s === 'polygon') {
+    let su = 0, sv = 0;
+    for (const p of reg.points) { su += p.u; sv += p.v; }
+    const n = Math.max(1, reg.points.length);
+    return { u: su / n, v: sv / n };
+  }
+  return { u: 0.5, v: 0.5 };
+}
+
+// Bounding box in UV for labels / hit-test optimisation
+function regionBBox(reg) {
+  const s = reg.shape || 'circle';
+  if (s === 'path') {
+    let u0 = 1, v0 = 1, u1 = 0, v1 = 0;
+    // use flattened polyline for accurate curved-bbox
+    for (const p of flattenPath(reg)) {
+      if (p.u < u0) u0 = p.u; if (p.u > u1) u1 = p.u;
+      if (p.v < v0) v0 = p.v; if (p.v > v1) v1 = p.v;
+    }
+    return { u0, v0, u1, v1 };
+  }
+  if (s === 'circle') {
+    return { u0: reg.cx - reg.r, v0: reg.cy - reg.r,
+             u1: reg.cx + reg.r, v1: reg.cy + reg.r };
+  }
+  if (s === 'rect') {
+    return { u0: reg.x, v0: reg.y, u1: reg.x + reg.w, v1: reg.y + reg.h };
+  }
+  if (s === 'polygon') {
+    let u0 = 1, v0 = 1, u1 = 0, v1 = 0;
+    for (const p of reg.points) {
+      if (p.u < u0) u0 = p.u; if (p.u > u1) u1 = p.u;
+      if (p.v < v0) v0 = p.v; if (p.v > v1) v1 = p.v;
+    }
+    return { u0, v0, u1, v1 };
+  }
+}
+
+function translateRegion(reg, du, dv) {
+  const s = reg.shape || 'circle';
+  if (s === 'path') {
+    for (const a of reg.anchors) {
+      a.u += du; a.v += dv;
+      a.hInU += du; a.hInV += dv;
+      a.hOutU += du; a.hOutV += dv;
+    }
+    reg._flatDirty = true;
+  }
+  else if (s === 'circle') { reg.cx += du; reg.cy += dv; }
+  else if (s === 'rect') { reg.x += du; reg.y += dv; }
+  else if (s === 'polygon') {
+    for (const p of reg.points) { p.u += du; p.v += dv; }
+  }
+}
+
+// Build canvas path in CSS pixels for any shape
+function addShapePathToCtx(ctx, reg, ox, oy, dW, dH) {
+  const s = reg.shape || 'circle';
+  if (s === 'path') {
+    const a = reg.anchors, n = a.length;
+    if (n < 2) return;
+    ctx.moveTo(ox + a[0].u * dW, oy + a[0].v * dH);
+    for (let i = 0; i < n; i++) {
+      const p0 = a[i], p1 = a[(i+1) % n];
+      ctx.bezierCurveTo(
+        ox + p0.hOutU * dW, oy + p0.hOutV * dH,
+        ox + p1.hInU  * dW, oy + p1.hInV  * dH,
+        ox + p1.u     * dW, oy + p1.v     * dH
+      );
+    }
+    ctx.closePath();
+    return;
+  }
+  if (s === 'circle') {
+    ctx.ellipse(ox + reg.cx * dW, oy + reg.cy * dH,
+                reg.r * dW, reg.r * dH, 0, 0, Math.PI*2);
+  } else if (s === 'rect') {
+    ctx.rect(ox + reg.x * dW, oy + reg.y * dH, reg.w * dW, reg.h * dH);
+  } else if (s === 'polygon') {
+    reg.points.forEach((p, i) => {
+      const px = ox + p.u * dW, py = oy + p.v * dH;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    });
+    ctx.closePath();
+  }
+}
+
+// ─── Preset path builders (all in UV space, scaled to bbox u0,v0..u1,v1) ───
+const KAPPA = 0.5522847498;
+
+function makeAnchor(u, v, hInU, hInV, hOutU, hOutV, type='smooth') {
+  return { u, v, hInU, hInV, hOutU, hOutV, type };
+}
+// Corner anchor: handles coincident with anchor (straight segments)
+function cornerAnchor(u, v) { return makeAnchor(u, v, u, v, u, v, 'corner'); }
+
+function pathPresetEllipse(u0, v0, u1, v1) {
+  const cx = (u0+u1)/2, cy = (v0+v1)/2;
+  const rx = (u1-u0)/2, ry = (v1-v0)/2;
+  const k  = KAPPA;
+  // 4 anchors (E, S, W, N going clockwise in UV with v down)
+  return [
+    makeAnchor(cx + rx, cy,       cx+rx, cy-ry*k, cx+rx, cy+ry*k, 'symmetric'),
+    makeAnchor(cx,      cy + ry,  cx+rx*k, cy+ry, cx-rx*k, cy+ry, 'symmetric'),
+    makeAnchor(cx - rx, cy,       cx-rx, cy+ry*k, cx-rx, cy-ry*k, 'symmetric'),
+    makeAnchor(cx,      cy - ry,  cx-rx*k, cy-ry, cx+rx*k, cy-ry, 'symmetric'),
+  ];
+}
+
+function pathPresetRect(u0, v0, u1, v1) {
+  return [
+    cornerAnchor(u0, v0),
+    cornerAnchor(u1, v0),
+    cornerAnchor(u1, v1),
+    cornerAnchor(u0, v1),
+  ];
+}
+
+function pathPresetRoundRect(u0, v0, u1, v1, rPct = 0.2) {
+  const w = u1-u0, h = v1-v0;
+  const r = Math.min(w, h) * rPct;
+  const k = KAPPA * r;
+  // 8 anchors: 2 per corner (horizontal entry + vertical exit), smooth corners
+  return [
+    makeAnchor(u0+r, v0, u0+r, v0, u0+r-k, v0, 'smooth'),  // top-left after round
+    makeAnchor(u1-r, v0, u1-r+k, v0, u1-r, v0, 'smooth'),  // before top-right
+    makeAnchor(u1, v0+r, u1, v0+r-k, u1, v0+r, 'smooth'),
+    makeAnchor(u1, v1-r, u1, v1-r, u1, v1-r+k, 'smooth'),
+    makeAnchor(u1-r, v1, u1-r+k, v1, u1-r, v1, 'smooth'),
+    makeAnchor(u0+r, v1, u0+r, v1, u0+r-k, v1, 'smooth'),
+    makeAnchor(u0, v1-r, u0, v1-r+k, u0, v1-r, 'smooth'),
+    makeAnchor(u0, v0+r, u0, v0+r, u0, v0+r-k, 'smooth'),
+  ];
+}
+
+function pathPresetTriangle(u0, v0, u1, v1) {
+  return [
+    cornerAnchor((u0+u1)/2, v0),
+    cornerAnchor(u1, v1),
+    cornerAnchor(u0, v1),
+  ];
+}
+
+function pathPresetDiamond(u0, v0, u1, v1) {
+  const cx = (u0+u1)/2, cy = (v0+v1)/2;
+  return [
+    cornerAnchor(cx, v0),
+    cornerAnchor(u1, cy),
+    cornerAnchor(cx, v1),
+    cornerAnchor(u0, cy),
+  ];
+}
+
+function pathPresetNGon(u0, v0, u1, v1, n) {
+  const cx = (u0+u1)/2, cy = (v0+v1)/2;
+  const rx = (u1-u0)/2, ry = (v1-v0)/2;
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const a = -Math.PI/2 + i * 2*Math.PI / n;
+    out.push(cornerAnchor(cx + rx*Math.cos(a), cy + ry*Math.sin(a)));
+  }
+  return out;
+}
+
+function pathPresetStar(u0, v0, u1, v1, points = 5, innerRatio = 0.45) {
+  const cx = (u0+u1)/2, cy = (v0+v1)/2;
+  const rx = (u1-u0)/2, ry = (v1-v0)/2;
+  const out = [];
+  for (let i = 0; i < points*2; i++) {
+    const a = -Math.PI/2 + i * Math.PI / points;
+    const f = (i % 2 === 0) ? 1 : innerRatio;
+    out.push(cornerAnchor(cx + rx*f*Math.cos(a), cy + ry*f*Math.sin(a)));
+  }
+  return out;
+}
+
+function pathPresetArrow(u0, v0, u1, v1) {
+  // Right-pointing arrow with bbox
+  const cy = (v0+v1)/2;
+  const h = v1 - v0;
+  const headW = (u1-u0) * 0.35;
+  const shaftY0 = cy - h * 0.18;
+  const shaftY1 = cy + h * 0.18;
+  return [
+    cornerAnchor(u0, shaftY0),
+    cornerAnchor(u1 - headW, shaftY0),
+    cornerAnchor(u1 - headW, v0),
+    cornerAnchor(u1, cy),
+    cornerAnchor(u1 - headW, v1),
+    cornerAnchor(u1 - headW, shaftY1),
+    cornerAnchor(u0, shaftY1),
+  ];
+}
+
+function pathPresetHeart(u0, v0, u1, v1) {
+  const w = u1-u0, h = v1-v0;
+  const cx = (u0+u1)/2;
+  // bottom tip + two smooth bumps using bezier handles
+  return [
+    makeAnchor(cx, v1,
+               cx - w*0.45, v0 + h*0.55,
+               cx + w*0.45, v0 + h*0.55, 'corner'),
+    makeAnchor(u1, v0 + h*0.28,
+               u1,          v0 + h*0.55,
+               u1,          v0 + h*0.05, 'smooth'),
+    makeAnchor(cx, v0 + h*0.22,
+               cx + w*0.28, v0,
+               cx - w*0.28, v0,          'corner'),
+    makeAnchor(u0, v0 + h*0.28,
+               u0,          v0 + h*0.05,
+               u0,          v0 + h*0.55, 'smooth'),
+  ];
+}
+
+const PATH_PRESETS = {
+  ellipse:   pathPresetEllipse,
+  rect:      pathPresetRect,
+  roundrect: pathPresetRoundRect,
+  triangle:  pathPresetTriangle,
+  diamond:   pathPresetDiamond,
+  pentagon:  (a,b,c,d) => pathPresetNGon(a,b,c,d,5),
+  hexagon:   (a,b,c,d) => pathPresetNGon(a,b,c,d,6),
+  star:      pathPresetStar,
+  arrow:     pathPresetArrow,
+  heart:     pathPresetHeart,
+};
+
+function makePathRegion(preset, u0, v0, u1, v1, baseProps) {
+  const fn = PATH_PRESETS[preset] || PATH_PRESETS.ellipse;
+  return {
+    shape: 'path',
+    preset,
+    closed: true,
+    anchors: fn(u0, v0, u1, v1),
+    ...baseProps
+  };
+}
+
+// Convert legacy shape to path (for edit-point mode)
+function convertRegionToPath(reg) {
+  if ((reg.shape || 'circle') === 'path') return;
+  const bb = regionBBox(reg);
+  let preset, anchors;
+  if ((reg.shape || 'circle') === 'circle') {
+    preset = 'ellipse';
+    anchors = pathPresetEllipse(bb.u0, bb.v0, bb.u1, bb.v1);
+  } else if (reg.shape === 'rect') {
+    preset = 'rect';
+    anchors = pathPresetRect(bb.u0, bb.v0, bb.u1, bb.v1);
+  } else if (reg.shape === 'polygon') {
+    preset = 'custom';
+    anchors = reg.points.map(p => cornerAnchor(p.u, p.v));
+  }
+  // wipe legacy fields, set path fields
+  delete reg.cx; delete reg.cy; delete reg.r;
+  delete reg.x;  delete reg.y;  delete reg.w; delete reg.h;
+  delete reg.points;
+  reg.shape = 'path';
+  reg.preset = preset;
+  reg.closed = true;
+  reg.anchors = anchors;
+  reg._flatDirty = true;
+}
+
+// Enforce anchor type invariants after a handle drag
+function enforceAnchorType(a, changed /* 'in'|'out' */) {
+  if (a.type === 'corner') return;
+  if (a.type === 'symmetric') {
+    // mirror changed side to the other
+    if (changed === 'out') {
+      a.hInU = 2*a.u - a.hOutU;
+      a.hInV = 2*a.v - a.hOutV;
+    } else {
+      a.hOutU = 2*a.u - a.hInU;
+      a.hOutV = 2*a.v - a.hInV;
+    }
+  } else if (a.type === 'smooth') {
+    // keep colinear with anchor, preserve other side's length
+    const srcU = changed === 'out' ? a.hOutU : a.hInU;
+    const srcV = changed === 'out' ? a.hOutV : a.hInV;
+    const dx = srcU - a.u, dy = srcV - a.v;
+    const L  = Math.hypot(dx, dy);
+    if (L < 1e-9) return;
+    const otherU = changed === 'out' ? a.hInU : a.hOutU;
+    const otherV = changed === 'out' ? a.hInV : a.hOutV;
+    const Lo = Math.hypot(otherU - a.u, otherV - a.v);
+    // unit vector from anchor to src, negated for opposite
+    const nx = -dx / L, ny = -dy / L;
+    if (changed === 'out') {
+      a.hInU = a.u + nx * Lo;
+      a.hInV = a.v + ny * Lo;
+    } else {
+      a.hOutU = a.u + nx * Lo;
+      a.hOutV = a.v + ny * Lo;
+    }
+  }
+}
+
+// Insert anchor on segment (0..n-1) at bezier parameter t (0..1)
+function insertAnchorOnSegment(reg, segIdx, t) {
+  if (reg.shape !== 'path') return;
+  const a = reg.anchors, n = a.length;
+  const p0 = a[segIdx], p1 = a[(segIdx+1) % n];
+  // De Casteljau subdivision
+  const x0=p0.u, y0=p0.v, x1=p0.hOutU, y1=p0.hOutV;
+  const x2=p1.hInU, y2=p1.hInV, x3=p1.u, y3=p1.v;
+  const mt = 1 - t;
+  const q0u = mt*x0 + t*x1, q0v = mt*y0 + t*y1;
+  const q1u = mt*x1 + t*x2, q1v = mt*y1 + t*y2;
+  const q2u = mt*x2 + t*x3, q2v = mt*y2 + t*y3;
+  const r0u = mt*q0u + t*q1u, r0v = mt*q0v + t*q1v;
+  const r1u = mt*q1u + t*q2u, r1v = mt*q1v + t*q2v;
+  const su  = mt*r0u + t*r1u, sv  = mt*r0v + t*r1v;
+  // new anchor at S with handles r0 (in) and r1 (out)
+  const newAnchor = makeAnchor(su, sv, r0u, r0v, r1u, r1v, 'smooth');
+  // update original handles
+  p0.hOutU = q0u; p0.hOutV = q0v;
+  p1.hInU  = q2u; p1.hInV  = q2v;
+  a.splice(segIdx+1, 0, newAnchor);
+  reg._flatDirty = true;
+}
+
+// Delete path anchor (keep >= 3)
+function deletePathAnchor(reg, idx) {
+  if (reg.shape !== 'path' || reg.anchors.length <= 3) return false;
+  reg.anchors.splice(idx, 1);
+  reg._flatDirty = true;
+  return true;
+}
+
+// Cycle anchor type (corner → smooth → symmetric → corner)
+function cycleAnchorType(a) {
+  if (a.type === 'corner') {
+    // seed handles so they are symmetric across anchor along tangent to neighbours
+    a.type = 'smooth';
+  } else if (a.type === 'smooth') {
+    a.type = 'symmetric';
+    // ensure truly symmetric
+    a.hInU = 2*a.u - a.hOutU; a.hInV = 2*a.v - a.hOutV;
+  } else {
+    a.type = 'corner';
+    a.hInU = a.u; a.hInV = a.v;
+    a.hOutU = a.u; a.hOutV = a.v;
+  }
+}
+
+// Nearest point on path segments — returns { segIdx, t, distSq, u, v } in UV
+function pathNearestOnSegments(reg, u, v) {
+  if (reg.shape !== 'path') return null;
+  const a = reg.anchors, n = a.length;
+  let best = null;
+  for (let i = 0; i < n; i++) {
+    const p0 = a[i], p1 = a[(i+1) % n];
+    const x0=p0.u, y0=p0.v, x1=p0.hOutU, y1=p0.hOutV;
+    const x2=p1.hInU, y2=p1.hInV, x3=p1.u, y3=p1.v;
+    const STEPS = 24;
+    for (let s = 0; s <= STEPS; s++) {
+      const t = s / STEPS, mt = 1 - t;
+      const b0 = mt*mt*mt, b1 = 3*mt*mt*t, b2 = 3*mt*t*t, b3 = t*t*t;
+      const pu = b0*x0 + b1*x1 + b2*x2 + b3*x3;
+      const pv = b0*y0 + b1*y1 + b2*y2 + b3*y3;
+      const du = pu - u, dv = pv - v;
+      const d2 = du*du + dv*dv;
+      if (!best || d2 < best.distSq) {
+        best = { segIdx: i, t, distSq: d2, u: pu, v: pv };
+      }
+    }
+  }
+  return best;
+}
+
+// Control-point handles (UV) for point-editing mode.
+//   kind: 'anchor' | 'hIn' | 'hOut' | (legacy) 'r-e'/'tl'/'vertex' ...
+//   idx: anchor index (for path shapes)
+function getControlPoints(reg) {
+  const s = reg.shape || 'circle';
+  if (s === 'path') {
+    const out = [];
+    reg.anchors.forEach((a, i) => {
+      out.push({ u: a.u,    v: a.v,    kind: 'anchor', idx: i, anchorType: a.type });
+      if (a.type !== 'corner') {
+        out.push({ u: a.hInU,  v: a.hInV,  kind: 'hIn',  idx: i });
+        out.push({ u: a.hOutU, v: a.hOutV, kind: 'hOut', idx: i });
+      }
+    });
+    return out;
+  }
+  if (s === 'circle') {
+    return [
+      { u: reg.cx + reg.r, v: reg.cy,        kind: 'r-e' },
+      { u: reg.cx - reg.r, v: reg.cy,        kind: 'r-w' },
+      { u: reg.cx,         v: reg.cy + reg.r, kind: 'r-s' },
+      { u: reg.cx,         v: reg.cy - reg.r, kind: 'r-n' },
+    ];
+  }
+  if (s === 'rect') {
+    return [
+      { u: reg.x,          v: reg.y,          kind: 'tl' },
+      { u: reg.x + reg.w,  v: reg.y,          kind: 'tr' },
+      { u: reg.x,          v: reg.y + reg.h,  kind: 'bl' },
+      { u: reg.x + reg.w,  v: reg.y + reg.h,  kind: 'br' },
+      { u: reg.x + reg.w/2,v: reg.y,          kind: 'em-t' },
+      { u: reg.x + reg.w,  v: reg.y + reg.h/2,kind: 'em-r' },
+      { u: reg.x + reg.w/2,v: reg.y + reg.h,  kind: 'em-b' },
+      { u: reg.x,          v: reg.y + reg.h/2,kind: 'em-l' },
+    ];
+  }
+  if (s === 'polygon') {
+    return reg.points.map((p, i) => ({ u: p.u, v: p.v, kind: 'vertex', idx: i }));
+  }
+  return [];
+}
+
+// Apply a dragged handle → mutate region
+function applyControlPointDrag(reg, handle, newU, newV) {
+  const s = reg.shape || 'circle';
+  if (s === 'path') {
+    const a = reg.anchors[handle.idx];
+    if (!a) return;
+    if (handle.kind === 'anchor') {
+      // move anchor; carry handles with it
+      const du = newU - a.u, dv = newV - a.v;
+      a.u = newU; a.v = newV;
+      a.hInU += du; a.hInV += dv;
+      a.hOutU += du; a.hOutV += dv;
+    } else if (handle.kind === 'hIn') {
+      a.hInU = newU; a.hInV = newV;
+      enforceAnchorType(a, 'in');
+    } else if (handle.kind === 'hOut') {
+      a.hOutU = newU; a.hOutV = newV;
+      enforceAnchorType(a, 'out');
+    }
+    reg._flatDirty = true;
+    return;
+  }
+  if (s === 'circle') {
+    const du = newU - reg.cx, dv = newV - reg.cy;
+    reg.r = Math.max(0.005, Math.sqrt(du*du + dv*dv));
+  }
+  else if (s === 'rect') {
+    let x0 = reg.x, y0 = reg.y, x1 = reg.x + reg.w, y1 = reg.y + reg.h;
+    const k = handle.kind;
+    if (k === 'tl')      { x0 = newU; y0 = newV; }
+    else if (k === 'tr') { x1 = newU; y0 = newV; }
+    else if (k === 'bl') { x0 = newU; y1 = newV; }
+    else if (k === 'br') { x1 = newU; y1 = newV; }
+    else if (k === 'em-t') { y0 = newV; }
+    else if (k === 'em-b') { y1 = newV; }
+    else if (k === 'em-l') { x0 = newU; }
+    else if (k === 'em-r') { x1 = newU; }
+    reg.x = Math.min(x0, x1); reg.y = Math.min(y0, y1);
+    reg.w = Math.max(0.005, Math.abs(x1 - x0));
+    reg.h = Math.max(0.005, Math.abs(y1 - y0));
+  }
+  else if (s === 'polygon' && handle.kind === 'vertex') {
+    reg.points[handle.idx].u = newU;
+    reg.points[handle.idx].v = newV;
+  }
+}
+
+// Insert a new polygon vertex at edge midpoint (on double-click of edge midpoint)
+function insertPolygonVertex(reg, idx, u, v) {
+  if ((reg.shape || 'circle') !== 'polygon') return;
+  reg.points.splice(idx + 1, 0, { u, v });
+}
+
+// Remove vertex (minimum 3 kept)
+function removePolygonVertex(reg, idx) {
+  if ((reg.shape || 'circle') !== 'polygon') return false;
+  if (reg.points.length <= 3) return false;
+  reg.points.splice(idx, 1);
+  return true;
+}
+
 function getVertexCompliance(u, v, regions) {
   let edgeC = BG_EDGE_C, restC = BG_REST_C;
   for (const r of regions) {
-    const du = u - r.cx, dv = v - r.cy;
-    if (du*du + dv*dv <= r.r*r.r) {
+    if (regionContains(r, u, v)) {
       // 0(rigid)은 절대 우선 적용; 아니면 더 탄성적인(큰) 값 채택
       edgeC = (r.edgeC === 0 || edgeC === 0) ? 0 : Math.max(edgeC, r.edgeC);
       restC = (r.restC === 0 || restC === 0) ? 0 : Math.max(restC, r.restC);
@@ -796,44 +1427,147 @@ customSlider.addEventListener('input', () => {
 });
 
 // ── Tool state ──────────────────────────────────
-let currentTool = 'draw';   // 'draw' | 'move'
+// 'shape' (draw preset via bbox drag) | 'polygon' | 'move' | 'edit'
+let currentTool  = 'shape';
+let currentPreset = 'ellipse';
+const SHAPE_ICONS = {
+  ellipse:'●', rect:'▭', roundrect:'▢', triangle:'▲', diamond:'◆',
+  pentagon:'⬟', hexagon:'⬡', star:'★', arrow:'➤', heart:'♥'
+};
 
 function setTool(t) {
   currentTool = t;
   document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
-  document.getElementById('tool-' + t).classList.add('active');
-  overlayCanvas.style.cursor = t === 'draw' ? 'crosshair' : 'default';
+  const btn = document.getElementById('tool-' + t);
+  if (btn) btn.classList.add('active');
+  if (t !== 'shape') closeShapePalette();
+
+  const isDraw = (t === 'shape' || t === 'polygon');
+  overlayCanvas.style.cursor = isDraw ? 'crosshair' : 'default';
+
   // cancel any in-progress operation when switching
-  drawing = false;
-  movingIdx = -1;
+  drawing      = false;
+  polygonDraft = null;
+  movingIdx    = -1;
+  editSelectedIdx = -1;
+  editDragHandle  = null;
+  hoverHandle     = null;
   redrawEditorOverlay();
 }
-document.getElementById('tool-draw').addEventListener('click', () => setTool('draw'));
-document.getElementById('tool-move').addEventListener('click', () => setTool('move'));
-// Keyboard shortcuts D / M
+
+const shapePalette = document.getElementById('shape-palette');
+function openShapePalette()  { shapePalette.classList.add('open'); }
+function closeShapePalette() { shapePalette.classList.remove('open'); }
+function toggleShapePalette(){ shapePalette.classList.toggle('open'); }
+
+function setPreset(p) {
+  currentPreset = p;
+  document.querySelectorAll('.shape-cell').forEach(c =>
+    c.classList.toggle('active', c.dataset.preset === p));
+  document.getElementById('tool-shape-icon').textContent = SHAPE_ICONS[p] || '●';
+}
+
+document.getElementById('tool-shape').addEventListener('click', () => {
+  if (currentTool === 'shape') toggleShapePalette();
+  else { setTool('shape'); openShapePalette(); }
+});
+document.querySelectorAll('.shape-cell').forEach(cell => {
+  cell.addEventListener('click', () => {
+    setPreset(cell.dataset.preset);
+    setTool('shape');
+    closeShapePalette();
+  });
+});
+document.getElementById('tool-polygon').addEventListener('click', () => setTool('polygon'));
+document.getElementById('tool-move'   ).addEventListener('click', () => setTool('move'));
+document.getElementById('tool-edit'   ).addEventListener('click', () => setTool('edit'));
+
+// click elsewhere closes palette
+document.addEventListener('click', e => {
+  if (e.target.closest('#tool-shape') || e.target.closest('#shape-palette')) return;
+  closeShapePalette();
+});
+
+// Keyboard shortcuts: S / P / M / E / Esc / Enter / Delete / Alt+click cycles type
 window.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-  if (e.key === 'd' || e.key === 'D') setTool('draw');
-  if (e.key === 'm' || e.key === 'M') setTool('move');
+  if (document.getElementById('editor-screen').style.display === 'none') return;
+  const k = e.key.toLowerCase();
+  if      (k === 's') setTool('shape');
+  else if (k === 'p') setTool('polygon');
+  else if (k === 'm') setTool('move');
+  else if (k === 'e') setTool('edit');
+  else if (k === 'enter' && currentTool === 'polygon' && polygonDraft
+          && polygonDraft.points.length >= 3) {
+    finalisePolygonDraft();
+  }
+  else if (k === 'escape') {
+    if (polygonDraft)         { polygonDraft = null; redrawEditorOverlay(); }
+    else if (editSelectedIdx >= 0) { editSelectedIdx = -1; redrawEditorOverlay(); }
+    else if (drawing)         { drawing = false; redrawEditorOverlay(); }
+    closeShapePalette();
+  }
+  else if ((k === 'delete' || k === 'backspace')
+           && currentTool === 'edit' && editSelectedIdx >= 0) {
+    const reg = appRegions[editSelectedIdx];
+    if (!hoverHandle) return;
+    if ((reg.shape || 'circle') === 'path' && hoverHandle.kind === 'anchor') {
+      if (deletePathAnchor(reg, hoverHandle.idx)) {
+        hoverHandle = null;
+        renderRegionsList();
+        redrawRegionCanvas(); redrawEditorOverlay();
+      }
+    } else if (reg.shape === 'polygon' && hoverHandle.kind === 'vertex') {
+      if (removePolygonVertex(reg, hoverHandle.idx)) {
+        hoverHandle = null;
+        renderRegionsList();
+        redrawRegionCanvas(); redrawEditorOverlay();
+      }
+    }
+  }
 });
 
 // ── Draw-tool state ──────────────────────────────
 let drawing = false, drawStart = null, drawCurrent = null;
 
+// polygon draft: { points:[{u,v},...], hoverUV:{u,v} }
+let polygonDraft = null;
+
 // ── Move-tool state ──────────────────────────────
-let movingIdx   = -1;       // index of region being dragged
-let moveStartUV = null;     // UV at pointer-down
-let moveOrigCX  = 0;        // region.cx before drag began
-let moveOrigCY  = 0;        // region.cy before drag began
+let movingIdx    = -1;
+let moveStartUV  = null;
+let moveOrigBase = null;  // snapshot to translate from
+
+// ── Point-edit state ─────────────────────────────
+let editSelectedIdx = -1;        // region being edited
+let editDragHandle  = null;      // handle currently dragged
+let hoverHandle     = null;      // handle under cursor (for highlight/delete)
 
 // returns index of topmost region that contains UV (u,v), or -1
 function findRegionAt(u, v) {
   for (let i = appRegions.length - 1; i >= 0; i--) {
-    const r = appRegions[i];
-    const du = u - r.cx, dv = v - r.cy;
-    if (du*du + dv*dv <= r.r*r.r) return i;
+    if (regionContains(appRegions[i], u, v)) return i;
   }
   return -1;
+}
+
+// Screen-space distance between two UV points (in CSS px, for handle hit-test)
+function uvPxDistSq(u1, v1, u2, v2) {
+  const { dW, dH } = getImageRect();
+  const dx = (u1 - u2) * dW, dy = (v1 - v2) * dH;
+  return dx*dx + dy*dy;
+}
+
+// Find handle under UV, within screen-space threshold (px)
+function findHandleAt(reg, u, v, thresholdPx = 9) {
+  const handles = getControlPoints(reg);
+  const t2 = thresholdPx * thresholdPx;
+  let best = null, bestD = t2;
+  for (const h of handles) {
+    const d2 = uvPxDistSq(h.u, h.v, u, v);
+    if (d2 <= bestD) { best = h; bestD = d2; }
+  }
+  return best;
 }
 
 function getImageRect() {
@@ -859,81 +1593,264 @@ function clientToImgUV(cx, cy) {
   };
 }
 
+// ─── Region creation helpers ────────────────────────────────────────
+function buildBaseRegionProps() {
+  const key    = partSelect.value;
+  const preset = PRESETS[key];
+  let edgeC = preset.edgeC, restC = preset.restC;
+  if (key === 'custom') {
+    const t = parseInt(customSlider.value) / 100;
+    edgeC = Math.pow(10, -5 + t * 1.7);
+    restC = edgeC * 4;
+  }
+  return { edgeC, restC, maxDragPct: 40,
+           color: preset.color, label: preset.label };
+}
+
+function finalisePolygonDraft() {
+  if (!polygonDraft || polygonDraft.points.length < 3) return;
+  appRegions.push({
+    shape: 'polygon',
+    points: polygonDraft.points.map(p => ({ ...p })),
+    ...buildBaseRegionProps()
+  });
+  polygonDraft = null;
+  renderRegionsList();
+  redrawRegionCanvas();
+  redrawEditorOverlay();
+}
+
+// ─── Pointer event dispatch ─────────────────────────────────────────
 overlayCanvas.addEventListener('pointerdown', e => {
   overlayCanvas.setPointerCapture(e.pointerId);
   const uv = clientToImgUV(e.clientX, e.clientY);
 
-  if (currentTool === 'draw') {
+  // ── Draw shape (bbox drag → preset path) ───────────────────────
+  if (currentTool === 'shape') {
     drawing    = true;
     drawStart  = uv;
     drawCurrent = { ...uv };
+    return;
+  }
 
-  } else if (currentTool === 'move') {
+  // ── Draw: Polygon (click-to-add) ───────────────────────────────
+  if (currentTool === 'polygon') {
+    if (!polygonDraft) {
+      polygonDraft = { points: [{ u: uv.u, v: uv.v }], hoverUV: { ...uv } };
+    } else {
+      // Close polygon if clicking near first vertex (≤ 10px)
+      const first = polygonDraft.points[0];
+      if (polygonDraft.points.length >= 3
+          && uvPxDistSq(uv.u, uv.v, first.u, first.v) < 100) {
+        finalisePolygonDraft();
+        return;
+      }
+      polygonDraft.points.push({ u: uv.u, v: uv.v });
+    }
+    redrawEditorOverlay();
+    return;
+  }
+
+  // ── Move (drag whole shape) ────────────────────────────────────
+  if (currentTool === 'move') {
     const idx = findRegionAt(uv.u, uv.v);
     if (idx >= 0) {
       movingIdx    = idx;
       moveStartUV  = uv;
-      moveOrigCX   = appRegions[idx].cx;
-      moveOrigCY   = appRegions[idx].cy;
+      moveOrigBase = JSON.parse(JSON.stringify(appRegions[idx]));
       overlayCanvas.style.cursor = 'grabbing';
     }
+    return;
+  }
+
+  // ── Point edit ─────────────────────────────────────────────────
+  if (currentTool === 'edit') {
+    // 1) selected region exists → try to grab one of its handles
+    if (editSelectedIdx >= 0) {
+      const reg = appRegions[editSelectedIdx];
+      const h   = findHandleAt(reg, uv.u, uv.v);
+      if (h) {
+        // Alt+click → cycle anchor type (path shapes only)
+        if (e.altKey && reg.shape === 'path' && h.kind === 'anchor') {
+          cycleAnchorType(reg.anchors[h.idx]);
+          reg._flatDirty = true;
+          redrawRegionCanvas(); redrawEditorOverlay();
+          return;
+        }
+        editDragHandle = h; redrawEditorOverlay(); return;
+      }
+    }
+    // 2) click inside a region → select it (auto-convert to path)
+    const idx = findRegionAt(uv.u, uv.v);
+    if (idx >= 0) {
+      convertRegionToPath(appRegions[idx]);
+    }
+    editSelectedIdx = idx;
+    editDragHandle  = null;
+    redrawRegionCanvas(); redrawEditorOverlay();
+    return;
   }
 });
 
 overlayCanvas.addEventListener('pointermove', e => {
   const uv = clientToImgUV(e.clientX, e.clientY);
 
-  if (currentTool === 'draw') {
+  if (currentTool === 'shape') {
     if (!drawing) return;
     drawCurrent = uv;
     redrawEditorOverlay();
+    return;
+  }
 
-  } else if (currentTool === 'move') {
+  if (currentTool === 'polygon') {
+    if (polygonDraft) {
+      polygonDraft.hoverUV = { ...uv };
+      redrawEditorOverlay();
+    }
+    return;
+  }
+
+  if (currentTool === 'move') {
     if (movingIdx >= 0) {
-      // drag: update region centre
-      appRegions[movingIdx].cx = moveOrigCX + (uv.u - moveStartUV.u);
-      appRegions[movingIdx].cy = moveOrigCY + (uv.v - moveStartUV.v);
+      const du = uv.u - moveStartUV.u;
+      const dv = uv.v - moveStartUV.v;
+      // re-seed target from snapshot then translate
+      const target = appRegions[movingIdx];
+      const src    = moveOrigBase;
+      const s = src.shape || 'circle';
+      if (s === 'path') {
+        target.anchors = src.anchors.map(a => ({
+          u: a.u+du, v: a.v+dv,
+          hInU: a.hInU+du, hInV: a.hInV+dv,
+          hOutU: a.hOutU+du, hOutV: a.hOutV+dv,
+          type: a.type
+        }));
+        target._flatDirty = true;
+      }
+      else if (s === 'circle') { target.cx = src.cx + du; target.cy = src.cy + dv; }
+      else if (s === 'rect') { target.x = src.x + du; target.y = src.y + dv; }
+      else if (s === 'polygon') {
+        target.points = src.points.map(p => ({ u: p.u + du, v: p.v + dv }));
+      }
       redrawRegionCanvas();
       redrawEditorOverlay();
     } else {
-      // hover: change cursor when over a region
       overlayCanvas.style.cursor =
         findRegionAt(uv.u, uv.v) >= 0 ? 'grab' : 'default';
+    }
+    return;
+  }
+
+  if (currentTool === 'edit') {
+    if (editDragHandle && editSelectedIdx >= 0) {
+      applyControlPointDrag(appRegions[editSelectedIdx], editDragHandle, uv.u, uv.v);
+      // handle refs (cx/cy etc.) may have changed; keep editDragHandle kind-only
+      redrawRegionCanvas();
+      redrawEditorOverlay();
+      return;
+    }
+    // hover handle → highlight + cursor
+    if (editSelectedIdx >= 0) {
+      const h = findHandleAt(appRegions[editSelectedIdx], uv.u, uv.v);
+      if (h !== hoverHandle) { hoverHandle = h; redrawEditorOverlay(); }
+      overlayCanvas.style.cursor = h ? 'move'
+        : (findRegionAt(uv.u, uv.v) >= 0 ? 'pointer' : 'default');
+    } else {
+      overlayCanvas.style.cursor =
+        findRegionAt(uv.u, uv.v) >= 0 ? 'pointer' : 'default';
     }
   }
 });
 
 overlayCanvas.addEventListener('pointerup', () => {
-  if (currentTool === 'draw') {
+  if (currentTool === 'shape') {
     if (!drawing) return;
     drawing = false;
     if (drawStart && drawCurrent) {
-      const du = drawCurrent.u - drawStart.u;
-      const dv = drawCurrent.v - drawStart.v;
-      const r  = Math.sqrt(du*du + dv*dv);
-      if (r > 0.01) {
-        const key    = partSelect.value;
-        const preset = PRESETS[key];
-        let edgeC = preset.edgeC, restC = preset.restC;
-        if (key === 'custom') {
-          const t = parseInt(customSlider.value) / 100;
-          edgeC = Math.pow(10, -5 + t * 1.7);
-          restC = edgeC * 4;
-        }
-        appRegions.push({ cx: drawStart.u, cy: drawStart.v, r,
-          edgeC, restC, maxDragPct: 40,
-          color: preset.color, label: preset.label });
-        renderRegionsList();
-        redrawRegionCanvas();
+      const u0 = Math.min(drawStart.u, drawCurrent.u);
+      const v0 = Math.min(drawStart.v, drawCurrent.v);
+      const u1 = Math.max(drawStart.u, drawCurrent.u);
+      const v1 = Math.max(drawStart.v, drawCurrent.v);
+      if ((u1 - u0) > 0.01 && (v1 - v0) > 0.01) {
+        appRegions.push(
+          makePathRegion(currentPreset, u0, v0, u1, v1, buildBaseRegionProps())
+        );
       }
+      renderRegionsList();
+      redrawRegionCanvas();
     }
     redrawEditorOverlay();
+    return;
+  }
 
-  } else if (currentTool === 'move') {
+  if (currentTool === 'move') {
     movingIdx = -1;
     moveStartUV = null;
+    moveOrigBase = null;
     overlayCanvas.style.cursor = 'default';
-    renderRegionsList();   // update list order if needed
+    renderRegionsList();
+    return;
+  }
+
+  if (currentTool === 'edit') {
+    editDragHandle = null;
+    renderRegionsList();
+    redrawEditorOverlay();
+  }
+});
+
+// Double-click: polygon draft close, or edit-mode → insert anchor on segment
+overlayCanvas.addEventListener('dblclick', e => {
+  if (currentTool === 'polygon' && polygonDraft && polygonDraft.points.length >= 3) {
+    finalisePolygonDraft();
+    return;
+  }
+  if (currentTool === 'edit' && editSelectedIdx >= 0) {
+    const reg = appRegions[editSelectedIdx];
+    if ((reg.shape || 'circle') !== 'path') return;
+    const uv = clientToImgUV(e.clientX, e.clientY);
+    // if handle under cursor → cycle anchor type
+    const h = findHandleAt(reg, uv.u, uv.v);
+    if (h && h.kind === 'anchor') {
+      cycleAnchorType(reg.anchors[h.idx]);
+      reg._flatDirty = true;
+      redrawRegionCanvas(); redrawEditorOverlay();
+      return;
+    }
+    // else → if close enough to path, insert a new anchor at that t
+    const near = pathNearestOnSegments(reg, uv.u, uv.v);
+    if (near) {
+      const { dW } = getImageRect();
+      const pxDist = Math.sqrt(near.distSq) * dW;
+      if (pxDist <= 10) {
+        insertAnchorOnSegment(reg, near.segIdx, near.t);
+        renderRegionsList();
+        redrawRegionCanvas(); redrawEditorOverlay();
+      }
+    }
+  }
+});
+
+// Right-click in point-edit mode → delete anchor / vertex
+overlayCanvas.addEventListener('contextmenu', e => {
+  if (currentTool !== 'edit' || editSelectedIdx < 0) return;
+  e.preventDefault();
+  const uv  = clientToImgUV(e.clientX, e.clientY);
+  const reg = appRegions[editSelectedIdx];
+  const h = findHandleAt(reg, uv.u, uv.v);
+  if (!h) return;
+  if ((reg.shape || 'circle') === 'path' && h.kind === 'anchor') {
+    if (deletePathAnchor(reg, h.idx)) {
+      hoverHandle = null;
+      renderRegionsList();
+      redrawRegionCanvas(); redrawEditorOverlay();
+    }
+  } else if (reg.shape === 'polygon' && h.kind === 'vertex') {
+    if (removePolygonVertex(reg, h.idx)) {
+      hoverHandle = null;
+      renderRegionsList();
+      redrawRegionCanvas(); redrawEditorOverlay();
+    }
   }
 });
 
@@ -941,33 +1858,154 @@ function redrawEditorOverlay() {
   const ctx = overlayCanvas.getContext('2d');
   ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
   const { ox, oy, dW, dH } = getImageRect();
+  const col = PRESETS[partSelect.value].color;
 
-  // Draw tool: preview circle while dragging
-  if (currentTool === 'draw' && drawing && drawStart && drawCurrent) {
-    const du = drawCurrent.u - drawStart.u, dv = drawCurrent.v - drawStart.v;
-    const r  = Math.sqrt(du*du + dv*dv);
-    const col = PRESETS[partSelect.value].color;
-    const cx  = ox + drawStart.u * dW;
-    const cy  = oy + drawStart.v * dH;
-    ctx.beginPath();
-    ctx.ellipse(cx, cy, r * dW, r * dH, 0, 0, Math.PI*2);
-    ctx.strokeStyle = col; ctx.lineWidth = 2;
-    ctx.fillStyle   = col + '33';
-    ctx.fill(); ctx.stroke();
+  // ── 그리기 미리보기 (Shape bbox 드래그) ────────────
+  if (currentTool === 'shape' && drawing && drawStart && drawCurrent) {
+    const u0 = Math.min(drawStart.u, drawCurrent.u);
+    const v0 = Math.min(drawStart.v, drawCurrent.v);
+    const u1 = Math.max(drawStart.u, drawCurrent.u);
+    const v1 = Math.max(drawStart.v, drawCurrent.v);
+    if ((u1 - u0) > 1e-4 && (v1 - v0) > 1e-4) {
+      const previewReg = {
+        shape: 'path', preset: currentPreset, closed: true,
+        anchors: (PATH_PRESETS[currentPreset] || PATH_PRESETS.ellipse)(u0, v0, u1, v1)
+      };
+      ctx.beginPath();
+      addShapePathToCtx(ctx, previewReg, ox, oy, dW, dH);
+      ctx.strokeStyle = col; ctx.lineWidth = 2;
+      ctx.fillStyle   = col + '33';
+      ctx.fill(); ctx.stroke();
+      // dashed bbox
+      ctx.beginPath();
+      ctx.rect(ox + u0*dW, oy + v0*dH, (u1-u0)*dW, (v1-v0)*dH);
+      ctx.strokeStyle = '#ffffff66'; ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]); ctx.stroke(); ctx.setLineDash([]);
+    }
   }
 
-  // Move tool: highlight the region being dragged
+  // ── 다각형 드래프트 (점 + 연결선 + 프리뷰 선) ─────────
+  if (currentTool === 'polygon' && polygonDraft) {
+    const pts = polygonDraft.points;
+    // fill preview (closed)
+    if (pts.length >= 3) {
+      ctx.beginPath();
+      pts.forEach((p, i) => {
+        const px = ox + p.u * dW, py = oy + p.v * dH;
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      });
+      ctx.closePath();
+      ctx.fillStyle = col + '22'; ctx.fill();
+    }
+    // stroke existing edges
+    ctx.beginPath();
+    pts.forEach((p, i) => {
+      const px = ox + p.u * dW, py = oy + p.v * dH;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    });
+    ctx.strokeStyle = col; ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // preview line from last point to cursor
+    if (polygonDraft.hoverUV && pts.length > 0) {
+      const last = pts[pts.length - 1];
+      ctx.beginPath();
+      ctx.moveTo(ox + last.u * dW, oy + last.v * dH);
+      ctx.lineTo(ox + polygonDraft.hoverUV.u * dW,
+                 oy + polygonDraft.hoverUV.v * dH);
+      ctx.strokeStyle = col; ctx.lineWidth = 1.5;
+      ctx.setLineDash([5, 4]); ctx.stroke(); ctx.setLineDash([]);
+    }
+    // draw vertex dots (highlight first)
+    pts.forEach((p, i) => {
+      const px = ox + p.u * dW, py = oy + p.v * dH;
+      ctx.beginPath(); ctx.arc(px, py, i === 0 ? 6 : 4, 0, Math.PI*2);
+      ctx.fillStyle = i === 0 ? '#fff' : col;
+      ctx.fill();
+      ctx.lineWidth = 1.5; ctx.strokeStyle = col; ctx.stroke();
+    });
+  }
+
+  // ── Move 툴: 드래그 중인 도형 강조 ──────────────────
   if (currentTool === 'move' && movingIdx >= 0) {
     const reg = appRegions[movingIdx];
-    const cx  = ox + reg.cx * dW;
-    const cy  = oy + reg.cy * dH;
     ctx.beginPath();
-    ctx.ellipse(cx, cy, reg.r * dW, reg.r * dH, 0, 0, Math.PI*2);
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth   = 2.5;
-    ctx.setLineDash([6, 3]);
-    ctx.stroke();
-    ctx.setLineDash([]);
+    addShapePathToCtx(ctx, reg, ox, oy, dW, dH);
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.5;
+    ctx.setLineDash([6, 3]); ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  // ── Point-edit 툴: 선택된 도형 강조 + 핸들 표시 ─────
+  if (currentTool === 'edit' && editSelectedIdx >= 0) {
+    const reg = appRegions[editSelectedIdx];
+
+    // selection outline
+    ctx.beginPath();
+    addShapePathToCtx(ctx, reg, ox, oy, dW, dH);
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+    ctx.setLineDash([5, 3]); ctx.stroke(); ctx.setLineDash([]);
+
+    // For path shapes: draw tangent lines anchor ↔ handles first
+    if ((reg.shape || 'circle') === 'path') {
+      ctx.strokeStyle = '#60a5fa'; ctx.lineWidth = 1;
+      reg.anchors.forEach(a => {
+        if (a.type === 'corner') return;
+        const ax = ox + a.u * dW, ay = oy + a.v * dH;
+        ctx.beginPath();
+        ctx.moveTo(ox + a.hInU  * dW, oy + a.hInV  * dH);
+        ctx.lineTo(ax, ay);
+        ctx.lineTo(ox + a.hOutU * dW, oy + a.hOutV * dH);
+        ctx.stroke();
+      });
+    }
+
+    // handles
+    const handles = getControlPoints(reg);
+    for (const h of handles) {
+      const px = ox + h.u * dW, py = oy + h.v * dH;
+      const isHover = hoverHandle && hoverHandle.kind === h.kind
+                    && ((h.idx === undefined && hoverHandle.idx === undefined)
+                        || h.idx === hoverHandle.idx);
+      if (h.kind === 'anchor') {
+        // anchor: square, colored by type (corner=sharp, smooth=round, symmetric=filled)
+        const size = isHover ? 9 : 7;
+        ctx.beginPath();
+        if (h.anchorType === 'corner') {
+          // square
+          ctx.rect(px - size/2, py - size/2, size, size);
+        } else if (h.anchorType === 'symmetric') {
+          // filled diamond
+          ctx.moveTo(px, py - size/2);
+          ctx.lineTo(px + size/2, py);
+          ctx.lineTo(px, py + size/2);
+          ctx.lineTo(px - size/2, py);
+          ctx.closePath();
+        } else {
+          // smooth: circle
+          ctx.arc(px, py, size/2, 0, Math.PI*2);
+        }
+        ctx.fillStyle   = isHover ? '#ffffff' : reg.color;
+        ctx.strokeStyle = '#0f172a';
+        ctx.lineWidth   = 1.5;
+        ctx.fill(); ctx.stroke();
+      } else if (h.kind === 'hIn' || h.kind === 'hOut') {
+        // control handle: small open circle
+        ctx.beginPath();
+        ctx.arc(px, py, isHover ? 5 : 4, 0, Math.PI*2);
+        ctx.fillStyle   = isHover ? '#ffffff' : '#1e3a8a';
+        ctx.strokeStyle = '#60a5fa';
+        ctx.lineWidth   = 1.5;
+        ctx.fill(); ctx.stroke();
+      } else {
+        // legacy (circle r-*, rect corners, polygon vertex)
+        ctx.beginPath();
+        ctx.arc(px, py, isHover ? 6 : 5, 0, Math.PI*2);
+        ctx.fillStyle   = isHover ? '#ffffff' : '#111827';
+        ctx.strokeStyle = reg.color;
+        ctx.lineWidth   = 2;
+        ctx.fill(); ctx.stroke();
+      }
+    }
   }
 }
 
@@ -976,16 +2014,17 @@ function redrawRegionCanvas() {
   const { ox, oy, dW, dH } = getImageRect();
   ctx.clearRect(0, 0, regionCanvas.width, regionCanvas.height);
   for (const reg of appRegions) {
-    const cx = ox + reg.cx * dW;
-    const cy = oy + reg.cy * dH;
     ctx.beginPath();
-    ctx.ellipse(cx, cy, reg.r * dW, reg.r * dH, 0, 0, Math.PI*2);
+    addShapePathToCtx(ctx, reg, ox, oy, dW, dH);
     ctx.strokeStyle = reg.color; ctx.lineWidth = 2;
     ctx.fillStyle   = reg.color + '30';
     ctx.fill(); ctx.stroke();
+
+    // label: right edge of bounding box
+    const bb = regionBBox(reg);
     ctx.fillStyle = reg.color;
     ctx.font = '12px Segoe UI';
-    ctx.fillText(reg.label, cx + reg.r * dW + 4, cy + 4);
+    ctx.fillText(reg.label, ox + bb.u1 * dW + 4, oy + (bb.v0 + bb.v1) * 0.5 * dH + 4);
   }
 }
 
@@ -1216,36 +2255,28 @@ function drawSimRegionOverlay(worldW, worldH) {
   const ctx = cvs.getContext('2d');
   ctx.clearRect(0, 0, cvs.width, cvs.height);
 
-  // Map world coords → canvas pixels (must match camera "contain" logic)
+  // Map UV [0,1] → canvas pixels (must match camera "contain" logic)
   const wa = window.innerWidth / window.innerHeight;
   const ia = worldW / worldH;
   const cW = wa > ia ? worldH * wa : worldW;
   const cH = wa > ia ? worldH      : worldW / wa;
-  function worldToCanvas(wx, wy) {
-    return {
-      px: ((wx / cW) + 0.5) * cvs.width,
-      py: (0.5 - (wy / cH)) * cvs.height
-    };
-  }
-  // UV to world
-  function uvToWorld(u, v) {
-    return { x: (u-0.5)*worldW, y: (0.5-v)*worldH };
-  }
+  const dW = (worldW / cW) * cvs.width;
+  const dH = (worldH / cH) * cvs.height;
+  const ox = cvs.width  * 0.5 - 0.5 * dW;
+  const oy = cvs.height * 0.5 - 0.5 * dH;
 
   for (const reg of appRegions) {
-    const wc  = uvToWorld(reg.cx, reg.cy);
-    const cp  = worldToCanvas(wc.x, wc.y);
-    // reg.r is in UV units — convert separately for x and y
-    // so the overlay ellipse matches the editor ellipse exactly
-    const rPxX = (reg.r * worldW / cW) * cvs.width;
-    const rPxY = (reg.r * worldH / cH) * cvs.height;
     ctx.beginPath();
-    ctx.ellipse(cp.px, cp.py, rPxX, rPxY, 0, 0, Math.PI*2);
+    addShapePathToCtx(ctx, reg, ox, oy, dW, dH);
     ctx.strokeStyle = reg.color; ctx.lineWidth = 1.5;
     ctx.fillStyle   = reg.color + '18';
     ctx.fill(); ctx.stroke();
+
+    const bb = regionBBox(reg);
+    const labelX = ox + bb.u1 * dW + 4;
+    const labelY = oy + (bb.v0 + bb.v1) * 0.5 * dH + 4;
     ctx.fillStyle = reg.color + 'cc'; ctx.font = '12px Segoe UI';
-    ctx.fillText(reg.label, cp.px + rPxX + 4, cp.py + 4);
+    ctx.fillText(reg.label, labelX, labelY);
   }
 }
 
