@@ -11,7 +11,30 @@
       "Bash(cmd /c \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python310\\\\python.exe --version\")",
       "Read(//c/Users/user/AppData/Local/Programs/Python//**)",
       "Read(//c/ProgramData/Anaconda2//**)",
-      "mcp__Claude_Preview__preview_start"
+      "mcp__Claude_Preview__preview_start",
+      "Bash(\"C:/Users/user/AppData/Local/Programs/Python/Python310/python.exe\" -m http.server 3000 --directory elastic-2d)",
+      "Bash(start python *)",
+      "Bash(python -m http.server 3000)",
+      "Bash(curl -s -o nul -w \"%{http_code}\" http://localhost:3000)",
+      "Bash(netstat -ano)",
+      "Bash(findstr :3000)",
+      "Bash(py --version)",
+      "Bash(python3.exe --version)",
+      "Bash(py -m http.server 3000)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3000)",
+      "Bash(grep -oP '\"role\":\"user\"[^}]*\"content\":\"[^\"]{20,}\"' \"C:/Users/user/.claude/projects/C--Users-user-OneDrive-Desktop-Squishy/d07cdcab-c326-4c3a-b0cd-ed5812a55b10.jsonl\")",
+      "Bash(python3 -c ' *)",
+      "Bash(/c/Users/user/AppData/Local/Programs/Python/Python311/python.exe -c ' *)",
+      "Bash(py -3 --version)",
+      "Bash(/c/Windows/py -3 --version)",
+      "Bash(py -3 -c ' *)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\" http://localhost:3000)",
+      "Bash(powershell -c \"Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force\")",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(powershell -NoProfile -c 'Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess | Sort-Object -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }')",
+      "Bash(powershell -NoProfile -c \"Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue | Measure-Object | Select-Object -ExpandProperty Count\")"
     ]
   }
 }
