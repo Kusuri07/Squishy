@@ -287,6 +287,17 @@
     }
     #btn-close-params:hover { color: #e5e7eb; background: rgba(255,255,255,.08); }
     #sim-params-list { padding: 8px; }
+
+    /* ── View-only mode (공개 감상용) ────────────────────── */
+    body.view-only #upload-screen,
+    body.view-only #editor-screen,
+    body.view-only #sim-hud,
+    body.view-only #sim-params-panel,
+    body.view-only #region-overlay-sim {
+      display: none !important;
+    }
+    body.view-only { cursor: grab; }
+    body.view-only:active { cursor: grabbing; }
   </style>
 </head>
 <body>
@@ -405,6 +416,7 @@
       <button id="btn-export" title="이미지 + 영역 + 설정을 JSON으로 저장">💾 내보내기</button>
       <button id="btn-import-editor" title="JSON 프로젝트 불러오기">📂 불러오기</button>
     </div>
+    <button id="btn-export-html" title="이미지·영역을 통째로 담은 공유용 단일 HTML 파일 생성">🌐 공개용 HTML</button>
     <button id="btn-start">시뮬레이션 시작</button>
     <button id="btn-reset-editor">처음으로</button>
   </div>
@@ -2644,6 +2656,10 @@ function resizeEditorCanvases() {
 }
 
 function showEditor(img) {
+  if (document.body.classList.contains('view-only')) {
+    startSimulation(img);
+    return;
+  }
   document.getElementById('upload-screen').style.display = 'none';
   const es = document.getElementById('editor-screen');
   es.style.display = 'flex';
@@ -3006,19 +3022,16 @@ function imageToPngDataURL(img) {
   return c.toDataURL('image/png');
 }
 
-function exportProject() {
-  if (!loadedImage) { alert('먼저 이미지를 불러와 주세요.'); return; }
-  // Prefer the original data URL (preserves source bytes + MIME).
+function buildCurrentProject() {
+  if (!loadedImage) { alert('먼저 이미지를 불러와 주세요.'); return null; }
   const imageDataUrl = loadedImageDataUrl || imageToPngDataURL(loadedImage);
 
-  // Strip transient / derived fields before serialising so the file stays
-  // clean. _flatDirty is recomputed on load.
   const regions = appRegions.map(r => {
     const { _flatDirty, _flatPts, ...rest } = r || {};
     return rest;
   });
 
-  const project = {
+  return {
     app:     'elastic-2d',
     version: PROJECT_VERSION,
     savedAt: new Date().toISOString(),
@@ -3032,6 +3045,11 @@ function exportProject() {
       numSubsteps
     }
   };
+}
+
+function exportProject() {
+  const project = buildCurrentProject();
+  if (!project) return;
 
   const blob = new Blob([JSON.stringify(project)], { type: 'application/json' });
   const url  = URL.createObjectURL(blob);
@@ -3113,6 +3131,73 @@ function applyProject(project) {
 
 document.getElementById('btn-export').addEventListener('click', exportProject);
 document.getElementById('btn-import-editor').addEventListener('click', pickProjectFile);
+document.getElementById('btn-export-html').addEventListener('click', exportStandaloneHtml);
+
+// ═══════════════════════════════════════════════
+//  VIEW-ONLY BOOT (URL ?project=… or embedded JSON)
+// ═══════════════════════════════════════════════
+async function bootAutoLoad() {
+  const params    = new URLSearchParams(location.search);
+  const forceEdit = params.has('edit');
+
+  const embedEl = document.getElementById('embedded-project');
+  if (embedEl && embedEl.textContent.trim()) {
+    try {
+      const proj = JSON.parse(embedEl.textContent);
+      if (!forceEdit) document.body.classList.add('view-only');
+      applyProject(proj);
+      return;
+    } catch (e) { console.warn('embedded-project parse failed:', e); }
+  }
+
+  const projectUrl = params.get('project');
+  if (projectUrl) {
+    try {
+      const res = await fetch(projectUrl, { cache: 'no-cache' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const proj = await res.json();
+      if (!forceEdit) document.body.classList.add('view-only');
+      applyProject(proj);
+    } catch (e) { alert('프로젝트를 불러오지 못했습니다: ' + e.message); }
+  }
+}
+
+async function exportStandaloneHtml() {
+  if (!loadedImage) { alert('먼저 이미지를 불러와 주세요.'); return; }
+
+  let htmlSource;
+  try {
+    const res = await fetch(location.pathname, { cache: 'no-cache' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    htmlSource = await res.text();
+  } catch (e) {
+    alert('HTML 소스를 읽지 못했습니다. 로컬 file:// 에서 실행 중이면 서버를 이용해 주세요.');
+    return;
+  }
+
+  const project = buildCurrentProject();
+  if (!project) return;
+  const json    = JSON.stringify(project).replace(/<\/script>/gi, '<\\/script>');
+  const payload = `<script id="embedded-project" type="application/json">${json}<\/script>`;
+
+  let injected;
+  if (/<script id="embedded-project"[^>]*>\s*<\/script>/i.test(htmlSource)) {
+    injected = htmlSource.replace(/<script id="embedded-project"[^>]*>\s*<\/script>/i, payload);
+  } else {
+    injected = htmlSource.replace(/<\/body>/i, payload + '\n</body>');
+  }
+
+  const blob = new Blob([injected], { type: 'text/html' });
+  const a    = document.createElement('a');
+  const base = loadedImageName ? loadedImageName.replace(/[^\w.-]+/g, '_') : 'squishy';
+  a.href     = URL.createObjectURL(blob);
+  a.download = `${base}-view.html`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+window.addEventListener('DOMContentLoaded', bootAutoLoad);
 </script>
+<script id="embedded-project" type="application/json"></script>
 </body>
 </html>
