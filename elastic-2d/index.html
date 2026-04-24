@@ -196,6 +196,30 @@
       font-size: 0.82rem; cursor: pointer;
     }
     #btn-reset-editor:hover { color: #e5e7eb; border-color: #6b7280; }
+    .editor-btn-row {
+      display: flex; gap: 8px;
+      margin: 16px 16px 0;
+    }
+    .editor-btn-row > button {
+      flex: 1;
+      padding: 8px 6px;
+      background: transparent; color: #9ca3af;
+      border: 1px solid #374151; border-radius: 8px;
+      font-size: 0.82rem; cursor: pointer;
+      transition: color .15s, border-color .15s, background .15s;
+    }
+    .editor-btn-row > button:hover {
+      color: #e5e7eb; border-color: #6b7280;
+      background: rgba(255,255,255,.03);
+    }
+    #upload-secondary {
+      font-size: 0.85rem; color: #9ca3af;
+      cursor: pointer; padding: 6px 12px; border-radius: 6px;
+      transition: color .15s, background .15s; user-select: none;
+    }
+    #upload-secondary:hover { color: #e5e7eb; background: rgba(255,255,255,.05); }
+    #upload-secondary u { color: #6366f1; text-decoration: none; border-bottom: 1px dashed currentColor; }
+    #upload-secondary:hover u { color: #818cf8; }
     #draw-hint {
       padding: 8px 16px; font-size: 0.78rem; color: #6b7280;
       line-height: 1.5;
@@ -274,7 +298,10 @@
   <div id="drop-zone">
     <div class="icon">&#128444;</div>
     <div>이미지를 여기에 드래그하거나 클릭해서 선택</div>
-    <div class="hint">JPG · PNG · WebP 지원</div>
+    <div class="hint">JPG · PNG · WebP · 저장된 .json 프로젝트</div>
+  </div>
+  <div id="upload-secondary">
+    또는 <u>저장된 프로젝트 파일(.json) 불러오기</u>
   </div>
 </div>
 
@@ -374,6 +401,10 @@
 
     <div id="regions-list"></div>
 
+    <div class="editor-btn-row">
+      <button id="btn-export" title="이미지 + 영역 + 설정을 JSON으로 저장">💾 내보내기</button>
+      <button id="btn-import-editor" title="JSON 프로젝트 불러오기">📂 불러오기</button>
+    </div>
     <button id="btn-start">시뮬레이션 시작</button>
     <button id="btn-reset-editor">처음으로</button>
   </div>
@@ -398,6 +429,8 @@
     <button class="hud-btn" id="btn-edit-regions">영역 편집</button>
     <button class="hud-btn" id="btn-reset-sim">메시 초기화</button>
     <button class="hud-btn" id="btn-params">파라미터</button>
+    <button class="hud-btn active" id="btn-toggle-overlay"
+            title="영역 윤곽 표시/숨기기 (V)">영역 표시</button>
   </div>
   <div class="hud-row">
     <button class="hud-btn active" id="btn-medium" data-substeps="10">Medium</button>
@@ -1399,7 +1432,9 @@ let scene3      = null;
 let animRunning = false;
 let numSubsteps = 10;
 let loadedImage = null;  // HTMLImageElement
-let loadedImageUrl = null; // blob URL (kept alive for editorImg)
+let loadedImageUrl = null; // blob URL or data URL (kept alive for editorImg)
+let loadedImageDataUrl = null; // data URL snapshot for project export
+let loadedImageName = null;    // original file basename, for export filename
 
 // FPS tracking
 let frameCount = 0, lastFpsTime = performance.now();
@@ -1419,12 +1454,28 @@ dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-ove
 dropZone.addEventListener('drop', e => {
   e.preventDefault(); dropZone.classList.remove('drag-over');
   const f = e.dataTransfer.files[0];
-  if (f && f.type.startsWith('image/')) loadImage(f);
+  if (!f) return;
+  if (f.type.startsWith('image/')) loadImage(f);
+  else if (f.name.toLowerCase().endsWith('.json') || f.type === 'application/json') importProjectFile(f);
 });
 
+// Upload-screen secondary action: open .json picker
+document.getElementById('upload-secondary').addEventListener('click', pickProjectFile);
+
+function _revokeIfBlobUrl(url) {
+  if (url && typeof url === 'string' && url.startsWith('blob:')) URL.revokeObjectURL(url);
+}
+
 function loadImage(file) {
-  if (loadedImageUrl) URL.revokeObjectURL(loadedImageUrl);
-  loadedImageUrl = URL.createObjectURL(file);
+  _revokeIfBlobUrl(loadedImageUrl);
+  loadedImageUrl     = URL.createObjectURL(file);
+  loadedImageDataUrl = null;
+  loadedImageName    = file.name ? file.name.replace(/\.[^.]+$/, '') : null;
+  // Read the file as a data URL in parallel so we can export later without
+  // re-encoding through a canvas (preserves original bytes / MIME type).
+  const fr = new FileReader();
+  fr.onload = () => { loadedImageDataUrl = fr.result; };
+  fr.readAsDataURL(file);
   const img = new Image();
   img.onload = () => { loadedImage = img; showEditor(img); };
   img.src = loadedImageUrl;
@@ -2622,7 +2673,8 @@ function startSimulation(img) {
   document.getElementById('editor-screen').style.display      = 'none';
   document.getElementById('canvas-container').style.display   = 'block';
   document.getElementById('sim-hud').style.display            = 'flex';
-  document.getElementById('region-overlay-sim').style.display = '';
+  document.getElementById('region-overlay-sim').style.display = showRegionOverlay ? '' : 'none';
+  applyRegionOverlayVisibility();  // sync button label/active state
   // 파라미터 패널은 닫은 상태로 시작
   document.getElementById('sim-params-panel').style.display   = 'none';
   document.getElementById('btn-params').classList.remove('active');
@@ -2873,6 +2925,34 @@ document.getElementById('btn-reset-sim').addEventListener('click', () => {
   if (softbody) softbody.resetToRest();
 });
 
+// ── Region overlay visibility toggle ────────────────────────────────
+// Controls the #region-overlay-sim canvas that draws shape outlines on top
+// of the simulation. Kept persistent across edit-room round trips so the
+// user's preference isn't reset whenever simulation restarts.
+let showRegionOverlay = true;
+function applyRegionOverlayVisibility() {
+  const cvs = document.getElementById('region-overlay-sim');
+  const btn = document.getElementById('btn-toggle-overlay');
+  if (cvs) cvs.style.display = showRegionOverlay ? '' : 'none';
+  if (btn) {
+    btn.classList.toggle('active', showRegionOverlay);
+    btn.textContent = showRegionOverlay ? '영역 표시' : '영역 숨김';
+  }
+}
+document.getElementById('btn-toggle-overlay').addEventListener('click', () => {
+  showRegionOverlay = !showRegionOverlay;
+  applyRegionOverlayVisibility();
+});
+window.addEventListener('keydown', e => {
+  if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) return;
+  // Only toggle when simulation HUD is actually visible
+  if (document.getElementById('sim-hud').style.display === 'none') return;
+  if (e.key === 'v' || e.key === 'V') {
+    showRegionOverlay = !showRegionOverlay;
+    applyRegionOverlayVisibility();
+  }
+});
+
 // Drag-limit slider — live update grabber.maxDrag
 const dragLimitSlider = document.getElementById('drag-limit-slider');
 const dragLimitVal    = document.getElementById('drag-limit-val');
@@ -2902,9 +2982,137 @@ document.getElementById('btn-reset-editor').addEventListener('click', () => {
   document.getElementById('sim-params-panel').style.display   = 'none';
   document.getElementById('upload-screen').style.display      = 'flex';
   appRegions = []; loadedImage = null;
-  if (loadedImageUrl) { URL.revokeObjectURL(loadedImageUrl); loadedImageUrl = null; }
+  _revokeIfBlobUrl(loadedImageUrl);
+  loadedImageUrl = null; loadedImageDataUrl = null; loadedImageName = null;
+  undoStack.length = 0; redoStack.length = 0;
   renderRegionsList();
 });
+
+// ═══════════════════════════════════════════════
+//  PROJECT EXPORT / IMPORT (.json)
+// ═══════════════════════════════════════════════
+// A "project" bundles the source image (inlined as a data URL) together with
+// the full region list and a few UI settings. This makes every .json file
+// self-contained — no external image dependency — at the cost of file size.
+const PROJECT_VERSION = 1;
+
+function imageToPngDataURL(img) {
+  // Fallback encoder when we don't have the original data URL.
+  // Re-rasterises through a canvas — lossless for PNG sources, lossy for JPEG.
+  const c = document.createElement('canvas');
+  c.width  = img.naturalWidth;
+  c.height = img.naturalHeight;
+  c.getContext('2d').drawImage(img, 0, 0);
+  return c.toDataURL('image/png');
+}
+
+function exportProject() {
+  if (!loadedImage) { alert('먼저 이미지를 불러와 주세요.'); return; }
+  // Prefer the original data URL (preserves source bytes + MIME).
+  const imageDataUrl = loadedImageDataUrl || imageToPngDataURL(loadedImage);
+
+  // Strip transient / derived fields before serialising so the file stays
+  // clean. _flatDirty is recomputed on load.
+  const regions = appRegions.map(r => {
+    const { _flatDirty, _flatPts, ...rest } = r || {};
+    return rest;
+  });
+
+  const project = {
+    app:     'elastic-2d',
+    version: PROJECT_VERSION,
+    savedAt: new Date().toISOString(),
+    image:   imageDataUrl,
+    imageName: loadedImageName || null,
+    regions,
+    settings: {
+      part:        partSelect.value,
+      customVal:   parseInt(customSlider.value, 10) || 50,
+      dragPct:     parseInt(document.getElementById('drag-limit-slider')?.value, 10) || 40,
+      numSubsteps
+    }
+  };
+
+  const blob = new Blob([JSON.stringify(project)], { type: 'application/json' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const base  = loadedImageName ? loadedImageName.replace(/[^\w.-]+/g, '_') : 'project';
+  a.href     = url;
+  a.download = `squishy-${base}-${stamp}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function pickProjectFile() {
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = 'application/json,.json';
+  inp.onchange = e => { if (e.target.files[0]) importProjectFile(e.target.files[0]); };
+  inp.click();
+}
+
+function importProjectFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    let project;
+    try { project = JSON.parse(reader.result); }
+    catch (err) { alert('JSON 파일을 읽지 못했습니다: ' + err.message); return; }
+    if (!project || project.app !== 'elastic-2d' || typeof project.image !== 'string') {
+      alert('Squishy 프로젝트 파일이 아닙니다.'); return;
+    }
+    applyProject(project);
+  };
+  reader.onerror = () => alert('파일을 읽는 중 오류가 발생했습니다.');
+  reader.readAsText(file);
+}
+
+function applyProject(project) {
+  // Swap image source — data URLs don't need object-URL cleanup, but a
+  // previously loaded blob URL does.
+  _revokeIfBlobUrl(loadedImageUrl);
+  loadedImageUrl     = project.image;
+  loadedImageDataUrl = project.image;
+  loadedImageName    = project.imageName || null;
+
+  const img = new Image();
+  img.onload = () => {
+    loadedImage = img;
+
+    // Deep-copy regions and mark path caches as dirty (they are recomputed
+    // lazily on first draw).
+    const raw = Array.isArray(project.regions) ? project.regions : [];
+    appRegions = JSON.parse(JSON.stringify(raw));
+    for (const r of appRegions) if (r && r.shape === 'path') r._flatDirty = true;
+
+    // History is meaningless across sessions — start fresh.
+    undoStack.length = 0; redoStack.length = 0;
+
+    // Best-effort UI state restore (silently skip unknown values).
+    const s = project.settings || {};
+    if (s.part && partSelect.querySelector(`option[value="${s.part}"]`)) {
+      partSelect.value = s.part;
+      customPanel.style.display = s.part === 'custom' ? 'block' : 'none';
+    }
+    if (typeof s.customVal === 'number') {
+      customSlider.value = s.customVal;
+      customVal.textContent = String(s.customVal);
+    }
+    const dragSlider = document.getElementById('drag-limit-slider');
+    const dragValEl  = document.getElementById('drag-limit-val');
+    if (dragSlider && typeof s.dragPct === 'number') {
+      dragSlider.value = s.dragPct;
+      if (dragValEl) dragValEl.textContent = s.dragPct + '%';
+    }
+    if (typeof s.numSubsteps === 'number') numSubsteps = s.numSubsteps;
+
+    showEditor(img);
+  };
+  img.onerror = () => alert('이미지 데이터를 불러오지 못했습니다. 손상된 프로젝트 파일일 수 있습니다.');
+  img.src = project.image;
+}
+
+document.getElementById('btn-export').addEventListener('click', exportProject);
+document.getElementById('btn-import-editor').addEventListener('click', pickProjectFile);
 </script>
 </body>
 </html>
