@@ -363,7 +363,13 @@
       &nbsp;&nbsp;· 세그먼트 더블클릭 = 앵커 추가<br>
       &nbsp;&nbsp;· 앵커 더블클릭/Alt+클릭 = 타입 순환<br>
       &nbsp;&nbsp;· 우클릭/Del = 앵커 삭제<br>
-      <span style="color:#6b7280">Esc: 선택/그리기 취소</span>
+      <span style="color:#6b7280">
+        Esc: 취소 · Tab/Shift+Tab: 도형 전환<br>
+        Ctrl+C/V/X/D: 복사/붙여/잘라/복제<br>
+        Ctrl+Z/Y: 실행취소/다시실행 · Del: 삭제<br>
+        ←↑→↓: 미세 이동 (Shift = 크게)<br>
+        Alt+드래그: 복제하며 이동
+      </span>
     </div>
 
     <div id="regions-list"></div>
@@ -1507,11 +1513,43 @@ document.addEventListener('click', e => {
   closeShapePalette();
 });
 
-// Keyboard shortcuts: S / P / M / E / Esc / Enter / Delete / Alt+click cycles type
+// Keyboard shortcuts: tool letters + PowerPoint-style shortcuts + undo/redo
 window.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   if (document.getElementById('editor-screen').style.display === 'none') return;
   const k = e.key.toLowerCase();
+
+  // ── Undo / Redo (Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z) ───────────────────
+  if (e.ctrlKey || e.metaKey) {
+    if (k === 'z' && !e.shiftKey)       { e.preventDefault(); doUndo();  return; }
+    if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); doRedo(); return; }
+    if (k === 'c') { e.preventDefault(); copySelection();     return; }
+    if (k === 'x') { e.preventDefault(); cutSelection();      return; }
+    if (k === 'v') { e.preventDefault(); pasteClipboard();    return; }
+    if (k === 'd') { e.preventDefault(); duplicateSelection();return; }
+  }
+
+  // ── Tab / Shift+Tab: cycle through regions ──────────────────────
+  if (k === 'tab') {
+    e.preventDefault();
+    cycleSelection(e.shiftKey ? -1 : 1);
+    return;
+  }
+
+  // ── Arrow keys: nudge selected region ───────────────────────────
+  if (k === 'arrowleft' || k === 'arrowright' || k === 'arrowup' || k === 'arrowdown') {
+    if (activeSelectionIdx() < 0) return;
+    e.preventDefault();
+    const step = e.shiftKey ? 0.03 : 0.005;
+    let du = 0, dv = 0;
+    if (k === 'arrowleft')  du = -step;
+    if (k === 'arrowright') du =  step;
+    if (k === 'arrowup')    dv = -step;
+    if (k === 'arrowdown')  dv =  step;
+    nudgeSelection(du, dv);
+    return;
+  }
+
   if      (k === 's') setTool('shape');
   else if (k === 'p') setTool('polygon');
   else if (k === 'm') setTool('move');
@@ -1535,22 +1573,32 @@ window.addEventListener('keydown', e => {
     else if (drawing)         { drawing = false; redrawEditorOverlay(); }
     closeShapePalette();
   }
-  else if ((k === 'delete' || k === 'backspace')
-           && currentTool === 'edit' && editSelectedIdx >= 0) {
-    const reg = appRegions[editSelectedIdx];
-    if (!hoverHandle) return;
-    if ((reg.shape || 'circle') === 'path' && hoverHandle.kind === 'anchor') {
-      if (deletePathAnchor(reg, hoverHandle.idx)) {
-        hoverHandle = null;
-        renderRegionsList();
-        redrawRegionCanvas(); redrawEditorOverlay();
+  else if (k === 'delete' || k === 'backspace') {
+    // in edit mode with anchor hover → delete anchor only
+    if (currentTool === 'edit' && editSelectedIdx >= 0 && hoverHandle) {
+      const reg = appRegions[editSelectedIdx];
+      if ((reg.shape || 'circle') === 'path' && hoverHandle.kind === 'anchor') {
+        pushHistory();
+        if (deletePathAnchor(reg, hoverHandle.idx)) {
+          hoverHandle = null;
+          renderRegionsList();
+          redrawRegionCanvas(); redrawEditorOverlay();
+        }
+        return;
       }
-    } else if (reg.shape === 'polygon' && hoverHandle.kind === 'vertex') {
-      if (removePolygonVertex(reg, hoverHandle.idx)) {
-        hoverHandle = null;
-        renderRegionsList();
-        redrawRegionCanvas(); redrawEditorOverlay();
+      if (reg.shape === 'polygon' && hoverHandle.kind === 'vertex') {
+        pushHistory();
+        if (removePolygonVertex(reg, hoverHandle.idx)) {
+          hoverHandle = null;
+          renderRegionsList();
+          redrawRegionCanvas(); redrawEditorOverlay();
+        }
+        return;
       }
+    }
+    // otherwise (or move mode) → delete the selected region
+    if (activeSelectionIdx() >= 0) {
+      deleteSelection();
     }
   }
 });
@@ -1764,6 +1812,125 @@ function buildBaseRegionProps() {
   return { edgeC, restC, maxDragPct: 40, color: preset.color, label };
 }
 
+// ─── Undo / Redo ────────────────────────────────────────────────────
+const MAX_HISTORY = 50;
+let undoStack = [], redoStack = [];
+function snapRegions() { return JSON.stringify(appRegions); }
+function restoreRegions(json) {
+  appRegions = JSON.parse(json);
+  for (const r of appRegions) if (r.shape === 'path') r._flatDirty = true;
+}
+function pushHistory() {
+  undoStack.push(snapRegions());
+  if (undoStack.length > MAX_HISTORY) undoStack.shift();
+  redoStack.length = 0;
+}
+function doUndo() {
+  if (undoStack.length === 0) return;
+  redoStack.push(snapRegions());
+  restoreRegions(undoStack.pop());
+  _afterHistoryRestore();
+}
+function doRedo() {
+  if (redoStack.length === 0) return;
+  undoStack.push(snapRegions());
+  restoreRegions(redoStack.pop());
+  _afterHistoryRestore();
+}
+function _afterHistoryRestore() {
+  // clamp selection indices
+  const n = appRegions.length;
+  if (moveSelectedIdx >= n) moveSelectedIdx = -1;
+  if (editSelectedIdx >= n) editSelectedIdx = -1;
+  if (highlightedRegionIdx >= n) highlightedRegionIdx = -1;
+  renderRegionsList();
+  redrawRegionCanvas();
+  redrawEditorOverlay();
+  softbody?.refreshCompliance(appRegions);
+}
+
+// ─── Clipboard ───────────────────────────────────────────────────────
+let regionClipboard = null;
+
+function activeSelectionIdx() {
+  if (currentTool === 'move' && moveSelectedIdx >= 0) return moveSelectedIdx;
+  if (currentTool === 'edit' && editSelectedIdx >= 0) return editSelectedIdx;
+  return highlightedRegionIdx >= 0 ? highlightedRegionIdx : -1;
+}
+function setActiveSelection(idx) {
+  highlightedRegionIdx = idx;
+  if (currentTool === 'move')      moveSelectedIdx = idx;
+  else if (currentTool === 'edit') {
+    editSelectedIdx = idx;
+    if (idx >= 0) convertRegionToPath(appRegions[idx]);
+  }
+  setRegionHighlight(idx);
+}
+function assignAutoLabel(reg) {
+  const base = (reg.label || '').replace(/\s+\d+$/, '');
+  const re = new RegExp('^' + base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' (\\d+)$');
+  let maxN = 0;
+  for (const r of appRegions) {
+    const m = r.label && r.label.match(re);
+    if (m) maxN = Math.max(maxN, parseInt(m[1]));
+  }
+  reg.label = `${base} ${maxN + 1}`;
+}
+function copySelection() {
+  const idx = activeSelectionIdx();
+  if (idx < 0) return false;
+  regionClipboard = JSON.parse(JSON.stringify(appRegions[idx]));
+  return true;
+}
+function pasteClipboard(offset = 0.02) {
+  if (!regionClipboard) return;
+  pushHistory();
+  const reg = JSON.parse(JSON.stringify(regionClipboard));
+  translateRegion(reg, offset, offset);
+  assignAutoLabel(reg);
+  appRegions.push(reg);
+  const newIdx = appRegions.length - 1;
+  setActiveSelection(newIdx);
+  renderRegionsList(); redrawRegionCanvas(); redrawEditorOverlay();
+  softbody?.refreshCompliance(appRegions);
+}
+function duplicateSelection() {
+  if (copySelection()) pasteClipboard();
+}
+function deleteSelection() {
+  const idx = activeSelectionIdx();
+  if (idx < 0) return;
+  pushHistory();
+  appRegions.splice(idx, 1);
+  if (moveSelectedIdx === idx) moveSelectedIdx = -1; else if (moveSelectedIdx > idx) moveSelectedIdx--;
+  if (editSelectedIdx === idx) editSelectedIdx = -1; else if (editSelectedIdx > idx) editSelectedIdx--;
+  if (highlightedRegionIdx === idx) highlightedRegionIdx = -1;
+  else if (highlightedRegionIdx > idx) highlightedRegionIdx--;
+  renderRegionsList(); redrawRegionCanvas(); redrawEditorOverlay();
+  softbody?.refreshCompliance(appRegions);
+}
+function cutSelection() {
+  if (copySelection()) deleteSelection();
+}
+function cycleSelection(delta) {
+  if (appRegions.length === 0) return;
+  if (currentTool !== 'move' && currentTool !== 'edit') setTool('move');
+  let cur = activeSelectionIdx();
+  let nxt;
+  if (cur < 0) nxt = (delta > 0) ? 0 : appRegions.length - 1;
+  else nxt = (cur + delta + appRegions.length) % appRegions.length;
+  setActiveSelection(nxt);
+  redrawRegionCanvas(); redrawEditorOverlay();
+}
+function nudgeSelection(du, dv) {
+  const idx = activeSelectionIdx();
+  if (idx < 0) return;
+  pushHistory();
+  translateRegion(appRegions[idx], du, dv);
+  redrawRegionCanvas(); redrawEditorOverlay();
+  softbody?.refreshCompliance(appRegions);
+}
+
 // ─── Region selection highlight in panels ───────────────────────────
 let highlightedRegionIdx = -1;
 function setRegionHighlight(idx) {
@@ -1787,6 +1954,7 @@ function setRegionHighlight(idx) {
 
 function finalisePolygonDraft() {
   if (!polygonDraft || polygonDraft.points.length < 3) return;
+  pushHistory();
   appRegions.push({
     shape: 'polygon',
     points: polygonDraft.points.map(p => ({ ...p })),
@@ -1847,18 +2015,30 @@ overlayCanvas.addEventListener('pointerdown', e => {
         moveScaleH = { kind: best.kind, startBBox: { u0: bb.u0, v0: bb.v0, u1: bb.u1, v1: bb.v1 } };
         moveOrigBase = JSON.parse(JSON.stringify(reg));
         overlayCanvas.style.cursor = bbCursor(best.kind);
+        pushHistory();
         return;
       }
     }
     // 2) click inside a region → select & start translate
     const idx = findRegionAt(uv.u, uv.v);
     if (idx >= 0) {
-      moveSelectedIdx = idx;
-      movingIdx    = idx;
+      // Alt+drag = duplicate while moving (PowerPoint style)
+      if (e.altKey) {
+        pushHistory();
+        const dup = JSON.parse(JSON.stringify(appRegions[idx]));
+        assignAutoLabel(dup);
+        appRegions.push(dup);
+        moveSelectedIdx = appRegions.length - 1;
+      } else {
+        pushHistory();
+        moveSelectedIdx = idx;
+      }
+      movingIdx    = moveSelectedIdx;
       moveStartUV  = uv;
-      moveOrigBase = JSON.parse(JSON.stringify(appRegions[idx]));
+      moveOrigBase = JSON.parse(JSON.stringify(appRegions[movingIdx]));
       overlayCanvas.style.cursor = 'grabbing';
-      setRegionHighlight(idx);
+      setRegionHighlight(movingIdx);
+      renderRegionsList();
       redrawEditorOverlay();
     } else {
       // click empty area → deselect
@@ -1878,11 +2058,13 @@ overlayCanvas.addEventListener('pointerdown', e => {
       if (h) {
         // Alt+click → cycle anchor type (path shapes only)
         if (e.altKey && reg.shape === 'path' && h.kind === 'anchor') {
+          pushHistory();
           cycleAnchorType(reg.anchors[h.idx]);
           reg._flatDirty = true;
           redrawRegionCanvas(); redrawEditorOverlay();
           return;
         }
+        pushHistory();
         editDragHandle = h; redrawEditorOverlay(); return;
       }
     }
@@ -1924,7 +2106,8 @@ overlayCanvas.addEventListener('pointermove', e => {
       appRegions[moveSelectedIdx] = JSON.parse(JSON.stringify(moveOrigBase));
       applyBBoxHandleDrag(appRegions[moveSelectedIdx], moveScaleH.kind,
                           moveScaleH.startBBox, uv.u, uv.v,
-                          { uniform: e.shiftKey, fromCenter: e.altKey });
+                          { uniform: e.shiftKey && !e.ctrlKey,
+                            fromCenter: e.altKey || (e.ctrlKey && e.shiftKey) });
       redrawRegionCanvas(); redrawEditorOverlay();
       return;
     }
@@ -2001,6 +2184,7 @@ overlayCanvas.addEventListener('pointerup', () => {
       const u1 = Math.max(drawStart.u, drawCurrent.u);
       const v1 = Math.max(drawStart.v, drawCurrent.v);
       if ((u1 - u0) > 0.01 && (v1 - v0) > 0.01) {
+        pushHistory();
         appRegions.push(
           makePathRegion(currentPreset, u0, v0, u1, v1, buildBaseRegionProps())
         );
@@ -2045,6 +2229,7 @@ overlayCanvas.addEventListener('dblclick', e => {
     // if handle under cursor → cycle anchor type
     const h = findHandleAt(reg, uv.u, uv.v);
     if (h && h.kind === 'anchor') {
+      pushHistory();
       cycleAnchorType(reg.anchors[h.idx]);
       reg._flatDirty = true;
       redrawRegionCanvas(); redrawEditorOverlay();
@@ -2056,6 +2241,7 @@ overlayCanvas.addEventListener('dblclick', e => {
       const { dW } = getImageRect();
       const pxDist = Math.sqrt(near.distSq) * dW;
       if (pxDist <= 10) {
+        pushHistory();
         insertAnchorOnSegment(reg, near.segIdx, near.t);
         renderRegionsList();
         redrawRegionCanvas(); redrawEditorOverlay();
@@ -2073,12 +2259,14 @@ overlayCanvas.addEventListener('contextmenu', e => {
   const h = findHandleAt(reg, uv.u, uv.v);
   if (!h) return;
   if ((reg.shape || 'circle') === 'path' && h.kind === 'anchor') {
+    pushHistory();
     if (deletePathAnchor(reg, h.idx)) {
       hoverHandle = null;
       renderRegionsList();
       redrawRegionCanvas(); redrawEditorOverlay();
     }
   } else if (reg.shape === 'polygon' && h.kind === 'vertex') {
+    pushHistory();
     if (removePolygonVertex(reg, h.idx)) {
       hoverHandle = null;
       renderRegionsList();
@@ -2352,6 +2540,7 @@ function renderRegionsList() {
     // delete
     div.querySelector('.region-del').addEventListener('click', e => {
       e.stopPropagation();
+      pushHistory();
       appRegions.splice(idx, 1);
       if (editSelectedIdx === idx) editSelectedIdx = -1;
       else if (editSelectedIdx > idx) editSelectedIdx--;
