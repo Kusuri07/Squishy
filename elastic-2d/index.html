@@ -122,7 +122,7 @@
     /* per-region sliders */
     .region-sliders { display: flex; flex-direction: column; gap: 4px; }
     .rslider-row {
-      display: grid; grid-template-columns: 28px 1fr 26px;
+      display: grid; grid-template-columns: 36px 1fr 34px;
       align-items: center; gap: 6px;
     }
     .rslider-label { font-size: 0.7rem; color: #6b7280; }
@@ -168,6 +168,19 @@
     }
     .hud-btn:hover  { background: rgba(55,65,81,.9); }
     .hud-btn.active { background: #6366f1; border-color: #6366f1; color: white; }
+    .hud-slider-wrap {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 12px;
+      background: rgba(31,41,55,.85);
+      border: 1px solid #374151;
+      border-radius: 8px;
+      backdrop-filter: blur(8px);
+      font-size: 0.78rem; color: #e5e7eb;
+    }
+    .hud-slider-wrap input[type=range] {
+      width: 110px; padding: 0; accent-color: #6366f1;
+    }
+    .hud-slider-val { min-width: 34px; color: #9ca3af; text-align: right; }
     #fps-counter {
       font-size: 0.72rem; color: #4b5563;
       padding: 4px 8px; background: rgba(17,24,39,.6);
@@ -287,6 +300,13 @@
   <div class="hud-row">
     <button class="hud-btn active" id="btn-medium" data-substeps="10">Medium</button>
     <button class="hud-btn" id="btn-high" data-substeps="20">High</button>
+  </div>
+  <div class="hud-row">
+    <div class="hud-slider-wrap">
+      <span>드래그 범위</span>
+      <input type="range" id="drag-limit-slider" min="5" max="100" value="40" step="5" />
+      <span class="hud-slider-val" id="drag-limit-val">40%</span>
+    </div>
   </div>
   <div id="fps-counter">FPS: --</div>
 </div>
@@ -528,6 +548,12 @@ class SoftBody2D {
   // weights them by a cosine falloff (centre=1, edge=0), pins them (invMass=0)
   // and stores their rest offsets.  Returns true if anything was grabbed.
   startGrab(gx, gy, radius, maxDrag) {
+    // Safety: release any leftover pinned verts from a prior grab
+    // whose pointerup was missed (pointer capture lost, tab blur, etc.).
+    // Without this, those verts stay invMass=0 forever and the mesh
+    // develops a permanent dent in that area.
+    this.endGrab();
+
     this.grabActive  = false;
     this.grabData    = [];
     this.grabStartX  = gx;
@@ -592,10 +618,13 @@ class SoftBody2D {
   }
 
   endGrab() {
-    if (!this.grabActive) return;
-    for (const gp of this.grabData) {
-      this.invMass[gp.id]   = gp.savedInvMass;
-      this.pos[gp.id*3+2]   = 0;   // lower z back to mesh plane
+    // Always drain grabData (even if grabActive is false), so a partially-
+    // initialised or leftover grab can't strand verts at invMass=0.
+    if (this.grabData) {
+      for (const gp of this.grabData) {
+        this.invMass[gp.id]   = gp.savedInvMass;
+        this.pos[gp.id*3+2]   = 0;   // lower z back to mesh plane
+      }
     }
     this.grabData   = [];
     this.grabActive = false;
@@ -631,6 +660,8 @@ class Grabber2D {
     this.renderer   = renderer;
     this.camera     = camera;
     this.bodies     = bodies;
+    this.worldW     = worldW;
+    this.worldH     = worldH;
     // Grab radius: 15% of shorter world dim → thick skin blob
     // Max drag   : 40% of shorter world dim → realistic pull limit
     this.grabRadius = Math.min(worldW, worldH) * 0.15;
@@ -642,6 +673,11 @@ class Grabber2D {
     el.addEventListener('pointerdown', e => this._down(e));
     window.addEventListener('pointermove', e => this._move(e));
     window.addEventListener('pointerup',   ()=> this._up());
+    // Safety: if pointer capture is lost (focus lost, alt-tab, devtools, etc.),
+    // treat it as a release so pinned verts don't stay stuck.
+    window.addEventListener('pointercancel', ()=> this._up());
+    el.addEventListener('lostpointercapture',  ()=> this._up());
+    window.addEventListener('blur', ()=> this._up());
   }
 
   _ndcToWorld(e) {
@@ -654,8 +690,16 @@ class Grabber2D {
 
   _down(e) {
     const { x, y } = this._ndcToWorld(e);
+    // Per-region drag limit: if grab center lies inside a region, use its maxDragPct.
+    // Otherwise fall back to the global HUD slider value (this.maxDrag).
+    const u = x / this.worldW + 0.5;
+    const v = 0.5 - y / this.worldH;
+    const regIdx = findRegionAt(u, v);
+    const perGrabMaxDrag = regIdx >= 0 && this.minDim
+      ? this.minDim * ((appRegions[regIdx].maxDragPct ?? 40) / 100)
+      : this.maxDrag;
     for (const b of this.bodies) {
-      if (b.startGrab(x, y, this.grabRadius, this.maxDrag)) {
+      if (b.startGrab(x, y, this.grabRadius, perGrabMaxDrag)) {
         this.active = b;
         try { e.currentTarget.setPointerCapture(e.pointerId); } catch(_) {}
         break;
@@ -877,7 +921,8 @@ overlayCanvas.addEventListener('pointerup', () => {
           restC = edgeC * 4;
         }
         appRegions.push({ cx: drawStart.u, cy: drawStart.v, r,
-          edgeC, restC, color: preset.color, label: preset.label });
+          edgeC, restC, maxDragPct: 40,
+          color: preset.color, label: preset.label });
         renderRegionsList();
         redrawRegionCanvas();
       }
@@ -966,6 +1011,7 @@ function renderRegionsList() {
   appRegions.forEach((reg, idx) => {
     const eVal = edgeCToSlider(reg.edgeC);
     const rVal = restCToSlider(reg.restC);
+    const dVal = reg.maxDragPct ?? 40;
 
     const div = document.createElement('div');
     div.className = 'region-item';
@@ -987,6 +1033,12 @@ function renderRegionsList() {
           <input type="range" class="r-rest-s" data-idx="${idx}"
                  min="0" max="100" value="${rVal}" />
           <span class="rslider-val r-rest-v">${rVal}</span>
+        </div>
+        <div class="rslider-row">
+          <span class="rslider-label">드래그</span>
+          <input type="range" class="r-drag-s" data-idx="${idx}"
+                 min="5" max="100" value="${dVal}" step="5" />
+          <span class="rslider-val r-drag-v">${dVal}%</span>
         </div>
       </div>`;
     regionsList.appendChild(div);
@@ -1015,6 +1067,15 @@ function renderRegionsList() {
       restVal.textContent = s;
       appRegions[idx].restC = sliderToRestC(s);
       softbody?.refreshCompliance(appRegions);
+    });
+
+    // drag-limit slider (per-region) — read at grab time, no live softbody update needed
+    const dragSlider = div.querySelector('.r-drag-s');
+    const dragValEl  = div.querySelector('.r-drag-v');
+    dragSlider.addEventListener('input', () => {
+      const s = parseInt(dragSlider.value);
+      dragValEl.textContent = s + '%';
+      appRegions[idx].maxDragPct = s;
     });
   });
 }
@@ -1108,15 +1169,19 @@ function startSimulation(img) {
   scene3.add(softbody.mesh);
 
   // Grabber — create once, then update properties on subsequent calls
+  const dragPct = parseInt(document.getElementById('drag-limit-slider').value) / 100;
   if (!grabber) {
     grabber = new Grabber2D(renderer3, camera3, [softbody], worldW, worldH);
   } else {
     grabber.renderer    = renderer3;
     grabber.camera      = camera3;
     grabber.grabRadius  = Math.min(worldW, worldH) * 0.15;
-    grabber.maxDrag     = Math.min(worldW, worldH) * 0.40;
     grabber.setBodies([softbody]);
   }
+  grabber.worldW  = worldW;
+  grabber.worldH  = worldH;
+  grabber.minDim  = Math.min(worldW, worldH);
+  grabber.maxDrag = grabber.minDim * dragPct;
 
   // Region overlay on simulation canvas
   drawSimRegionOverlay(worldW, worldH);
@@ -1224,6 +1289,7 @@ function renderSimParamsList() {
   appRegions.forEach((reg, idx) => {
     const eVal = edgeCToSlider(reg.edgeC);
     const rVal = restCToSlider(reg.restC);
+    const dVal = reg.maxDragPct ?? 40;
     const div = document.createElement('div');
     div.className = 'region-item';
     div.innerHTML = `
@@ -1241,6 +1307,11 @@ function renderSimParamsList() {
           <span class="rslider-label">복원</span>
           <input type="range" class="r-rest-s" min="0" max="100" value="${rVal}" />
           <span class="rslider-val r-rest-v">${rVal}</span>
+        </div>
+        <div class="rslider-row">
+          <span class="rslider-label">드래그</span>
+          <input type="range" class="r-drag-s" min="5" max="100" value="${dVal}" step="5" />
+          <span class="rslider-val r-drag-v">${dVal}%</span>
         </div>
       </div>`;
     container.appendChild(div);
@@ -1261,6 +1332,14 @@ function renderSimParamsList() {
       restVal.textContent = s;
       appRegions[idx].restC = sliderToRestC(s);
       softbody?.refreshCompliance(appRegions);
+    });
+
+    const dragSlider = div.querySelector('.r-drag-s');
+    const dragValEl  = div.querySelector('.r-drag-v');
+    dragSlider.addEventListener('input', () => {
+      const s = parseInt(dragSlider.value);
+      dragValEl.textContent = s + '%';
+      appRegions[idx].maxDragPct = s;
     });
   });
 }
@@ -1297,6 +1376,17 @@ document.getElementById('btn-edit-regions').addEventListener('click', () => {
 
 document.getElementById('btn-reset-sim').addEventListener('click', () => {
   if (softbody) softbody.resetToRest();
+});
+
+// Drag-limit slider — live update grabber.maxDrag
+const dragLimitSlider = document.getElementById('drag-limit-slider');
+const dragLimitVal    = document.getElementById('drag-limit-val');
+dragLimitSlider.addEventListener('input', () => {
+  const pct = parseInt(dragLimitSlider.value);
+  dragLimitVal.textContent = pct + '%';
+  if (grabber && grabber.minDim) {
+    grabber.maxDrag = grabber.minDim * (pct / 100);
+  }
 });
 
 document.querySelectorAll('.hud-btn[data-substeps]').forEach(btn => {
