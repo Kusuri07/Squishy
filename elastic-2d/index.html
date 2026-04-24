@@ -355,7 +355,8 @@
     <div id="draw-hint">
       <b>●&nbsp;도형</b> &nbsp;클릭해 종류 선택 후 드래그<br>
       <b>⬟&nbsp;자유 다각형</b> &nbsp;클릭해 점 추가, 더블클릭/Enter로 완료<br>
-      <b>🖐&nbsp;이동</b> &nbsp;도형을 끌어서 이동<br>
+      <b>🖐&nbsp;이동/크기</b> &nbsp;도형을 끌어 이동, 모서리/변 핸들로 확대·늘이기<br>
+      &nbsp;&nbsp;· Shift = 비율 유지, Alt = 중심 기준<br>
       <b>◈&nbsp;점 편집</b> &nbsp;도형 선택 후:<br>
       &nbsp;&nbsp;· 네모/원/다이아 = 앵커 (끌어 이동)<br>
       &nbsp;&nbsp;· 파란 원 = 접선 핸들 (곡선 조정)<br>
@@ -1465,6 +1466,8 @@ function setTool(t) {
   drawing      = false;
   polygonDraft = null;
   movingIdx    = -1;
+  moveSelectedIdx = -1;
+  moveScaleH   = null;
   editSelectedIdx = -1;
   editDragHandle  = null;
   hoverHandle     = null;
@@ -1524,6 +1527,11 @@ window.addEventListener('keydown', e => {
       setRegionHighlight(-1);
       redrawEditorOverlay();
     }
+    else if (moveSelectedIdx >= 0) {
+      moveSelectedIdx = -1;
+      setRegionHighlight(-1);
+      redrawEditorOverlay();
+    }
     else if (drawing)         { drawing = false; redrawEditorOverlay(); }
     closeShapePalette();
   }
@@ -1554,9 +1562,11 @@ let drawing = false, drawStart = null, drawCurrent = null;
 let polygonDraft = null;
 
 // ── Move-tool state ──────────────────────────────
-let movingIdx    = -1;
+let moveSelectedIdx = -1;   // persistent selection (bbox shown)
+let movingIdx    = -1;      // currently dragging translate
 let moveStartUV  = null;
-let moveOrigBase = null;  // snapshot to translate from
+let moveOrigBase = null;    // snapshot to translate/scale from
+let moveScaleH   = null;    // active bbox handle while scaling: { kind:'bb-*', pivotU, pivotV, bbW, bbH }
 
 // ── Point-edit state ─────────────────────────────
 let editSelectedIdx = -1;        // region being edited
@@ -1569,6 +1579,125 @@ function findRegionAt(u, v) {
     if (regionContains(appRegions[i], u, v)) return i;
   }
   return -1;
+}
+
+// 8 bounding-box transform handles for move-tool scale/stretch
+function getBBoxHandles(reg) {
+  const bb = regionBBox(reg);
+  const cu = (bb.u0 + bb.u1) / 2, cv = (bb.v0 + bb.v1) / 2;
+  return [
+    { u: bb.u0, v: bb.v0, kind: 'bb-nw' },
+    { u: cu,    v: bb.v0, kind: 'bb-n'  },
+    { u: bb.u1, v: bb.v0, kind: 'bb-ne' },
+    { u: bb.u1, v: cv,    kind: 'bb-e'  },
+    { u: bb.u1, v: bb.v1, kind: 'bb-se' },
+    { u: cu,    v: bb.v1, kind: 'bb-s'  },
+    { u: bb.u0, v: bb.v1, kind: 'bb-sw' },
+    { u: bb.u0, v: cv,    kind: 'bb-w'  },
+  ];
+}
+
+// Cursor style for bbox handle kind
+function bbCursor(kind) {
+  return ({
+    'bb-nw':'nwse-resize','bb-se':'nwse-resize',
+    'bb-ne':'nesw-resize','bb-sw':'nesw-resize',
+    'bb-n':'ns-resize','bb-s':'ns-resize',
+    'bb-e':'ew-resize','bb-w':'ew-resize',
+  })[kind] || 'default';
+}
+
+// Scale all points of a region by (sx, sy) around pivot (pu, pv).
+// Auto-converts legacy shapes to path for non-uniform scaling.
+function scaleRegion(reg, sx, sy, pu, pv) {
+  const s = reg.shape || 'circle';
+  if (s === 'path') {
+    for (const a of reg.anchors) {
+      a.u   = pu + (a.u   - pu) * sx; a.v   = pv + (a.v   - pv) * sy;
+      a.hInU  = pu + (a.hInU  - pu) * sx; a.hInV  = pv + (a.hInV  - pv) * sy;
+      a.hOutU = pu + (a.hOutU - pu) * sx; a.hOutV = pv + (a.hOutV - pv) * sy;
+    }
+    reg._flatDirty = true;
+    return;
+  }
+  if (s === 'circle') {
+    if (Math.abs(sx - sy) < 1e-6) {
+      // uniform — keep circle
+      reg.cx = pu + (reg.cx - pu) * sx;
+      reg.cy = pv + (reg.cy - pv) * sy;
+      reg.r  = reg.r * Math.abs(sx);
+    } else {
+      // non-uniform → convert to path first
+      convertRegionToPath(reg);
+      scaleRegion(reg, sx, sy, pu, pv);
+    }
+    return;
+  }
+  if (s === 'rect') {
+    const x0 = reg.x, y0 = reg.y, x1 = reg.x + reg.w, y1 = reg.y + reg.h;
+    const nx0 = pu + (x0 - pu) * sx, nx1 = pu + (x1 - pu) * sx;
+    const ny0 = pv + (y0 - pv) * sy, ny1 = pv + (y1 - pv) * sy;
+    reg.x = Math.min(nx0, nx1); reg.y = Math.min(ny0, ny1);
+    reg.w = Math.max(0.005, Math.abs(nx1 - nx0));
+    reg.h = Math.max(0.005, Math.abs(ny1 - ny0));
+    return;
+  }
+  if (s === 'polygon') {
+    for (const p of reg.points) {
+      p.u = pu + (p.u - pu) * sx;
+      p.v = pv + (p.v - pv) * sy;
+    }
+  }
+}
+
+// Apply bbox-handle drag with optional uniform (shift) + centred (alt) modifiers
+function applyBBoxHandleDrag(reg, handleKind, startBBox, curU, curV, opts) {
+  const { uniform, fromCenter } = opts;
+  const { u0, v0, u1, v1 } = startBBox;
+  // Determine which edges are moving
+  const movesW = handleKind.endsWith('w') || handleKind === 'bb-nw' || handleKind === 'bb-sw';
+  const movesE = handleKind.endsWith('e') || handleKind === 'bb-ne' || handleKind === 'bb-se';
+  const movesN = handleKind.startsWith('bb-n');
+  const movesS = handleKind.startsWith('bb-s');
+
+  let newU0 = u0, newU1 = u1, newV0 = v0, newV1 = v1;
+  if (movesW) newU0 = curU;
+  if (movesE) newU1 = curU;
+  if (movesN) newV0 = curV;
+  if (movesS) newV1 = curV;
+
+  // Pivot = opposite side (or center if alt)
+  let pu = movesW ? u1 : (movesE ? u0 : (u0+u1)/2);
+  let pv = movesN ? v1 : (movesS ? v0 : (v0+v1)/2);
+  if (fromCenter) { pu = (u0+u1)/2; pv = (v0+v1)/2; }
+
+  // Scale factors (only when that axis moves)
+  let sx = 1, sy = 1;
+  const oldW = u1 - u0, oldH = v1 - v0;
+  if (movesW || movesE) {
+    if (fromCenter) {
+      sx = 2 * (curU - pu) / (((movesW ? -1 : 1) * oldW) || 1e-9);
+    } else {
+      sx = (movesW ? (pu - curU) : (curU - pu)) / (oldW || 1e-9);
+    }
+  }
+  if (movesN || movesS) {
+    if (fromCenter) {
+      sy = 2 * (curV - pv) / (((movesN ? -1 : 1) * oldH) || 1e-9);
+    } else {
+      sy = (movesN ? (pv - curV) : (curV - pv)) / (oldH || 1e-9);
+    }
+  }
+  // Clamp minimum
+  if (Math.abs(sx) < 0.05) sx = sx < 0 ? -0.05 : 0.05;
+  if (Math.abs(sy) < 0.05) sy = sy < 0 ? -0.05 : 0.05;
+  // Uniform modifier: corner handles only
+  const isCorner = (movesW || movesE) && (movesN || movesS);
+  if (uniform && isCorner) {
+    const m = Math.min(Math.abs(sx), Math.abs(sy));
+    sx = Math.sign(sx) * m; sy = Math.sign(sy) * m;
+  }
+  scaleRegion(reg, sx, sy, pu, pv);
 }
 
 // Screen-space distance between two UV points (in CSS px, for handle hit-test)
@@ -1701,15 +1830,41 @@ overlayCanvas.addEventListener('pointerdown', e => {
     return;
   }
 
-  // ── Move (drag whole shape) ────────────────────────────────────
+  // ── Move (drag or scale) ───────────────────────────────────────
   if (currentTool === 'move') {
+    // 1) if a region is selected, try hit-testing its bbox handles first
+    if (moveSelectedIdx >= 0) {
+      const reg = appRegions[moveSelectedIdx];
+      const handles = getBBoxHandles(reg);
+      const t2 = 11 * 11;
+      let best = null, bestD = t2;
+      for (const h of handles) {
+        const d2 = uvPxDistSq(h.u, h.v, uv.u, uv.v);
+        if (d2 <= bestD) { best = h; bestD = d2; }
+      }
+      if (best) {
+        const bb = regionBBox(reg);
+        moveScaleH = { kind: best.kind, startBBox: { u0: bb.u0, v0: bb.v0, u1: bb.u1, v1: bb.v1 } };
+        moveOrigBase = JSON.parse(JSON.stringify(reg));
+        overlayCanvas.style.cursor = bbCursor(best.kind);
+        return;
+      }
+    }
+    // 2) click inside a region → select & start translate
     const idx = findRegionAt(uv.u, uv.v);
     if (idx >= 0) {
+      moveSelectedIdx = idx;
       movingIdx    = idx;
       moveStartUV  = uv;
       moveOrigBase = JSON.parse(JSON.stringify(appRegions[idx]));
       overlayCanvas.style.cursor = 'grabbing';
       setRegionHighlight(idx);
+      redrawEditorOverlay();
+    } else {
+      // click empty area → deselect
+      moveSelectedIdx = -1;
+      setRegionHighlight(-1);
+      redrawEditorOverlay();
     }
     return;
   }
@@ -1763,6 +1918,16 @@ overlayCanvas.addEventListener('pointermove', e => {
   }
 
   if (currentTool === 'move') {
+    // scaling via bbox handle
+    if (moveScaleH && moveSelectedIdx >= 0 && moveOrigBase) {
+      // re-seed target from snapshot
+      appRegions[moveSelectedIdx] = JSON.parse(JSON.stringify(moveOrigBase));
+      applyBBoxHandleDrag(appRegions[moveSelectedIdx], moveScaleH.kind,
+                          moveScaleH.startBBox, uv.u, uv.v,
+                          { uniform: e.shiftKey, fromCenter: e.altKey });
+      redrawRegionCanvas(); redrawEditorOverlay();
+      return;
+    }
     if (movingIdx >= 0) {
       const du = uv.u - moveStartUV.u;
       const dv = uv.v - moveStartUV.v;
@@ -1787,8 +1952,20 @@ overlayCanvas.addEventListener('pointermove', e => {
       redrawRegionCanvas();
       redrawEditorOverlay();
     } else {
-      overlayCanvas.style.cursor =
-        findRegionAt(uv.u, uv.v) >= 0 ? 'grab' : 'default';
+      // hover: bbox handle → resize cursor; else inside shape → grab
+      let cur = 'default';
+      if (moveSelectedIdx >= 0) {
+        const reg = appRegions[moveSelectedIdx];
+        const handles = getBBoxHandles(reg);
+        let best = null, bestD = 11*11;
+        for (const h of handles) {
+          const d2 = uvPxDistSq(h.u, h.v, uv.u, uv.v);
+          if (d2 <= bestD) { best = h; bestD = d2; }
+        }
+        if (best) cur = bbCursor(best.kind);
+      }
+      if (cur === 'default' && findRegionAt(uv.u, uv.v) >= 0) cur = 'grab';
+      overlayCanvas.style.cursor = cur;
     }
     return;
   }
@@ -1837,10 +2014,13 @@ overlayCanvas.addEventListener('pointerup', () => {
   }
 
   if (currentTool === 'move') {
+    const wasScaling = !!moveScaleH;
     movingIdx = -1;
     moveStartUV = null;
     moveOrigBase = null;
+    moveScaleH = null;
     overlayCanvas.style.cursor = 'default';
+    if (wasScaling) redrawEditorOverlay();
     renderRegionsList();
     return;
   }
@@ -1979,13 +2159,33 @@ function redrawEditorOverlay() {
     });
   }
 
-  // ── Move 툴: 드래그 중인 도형 강조 ──────────────────
-  if (currentTool === 'move' && movingIdx >= 0) {
-    const reg = appRegions[movingIdx];
+  // ── Move 툴: 선택된 도형 bbox + 8-핸들 표시 ────────
+  if (currentTool === 'move' && moveSelectedIdx >= 0) {
+    const reg = appRegions[moveSelectedIdx];
+    // highlight outline
     ctx.beginPath();
     addShapePathToCtx(ctx, reg, ox, oy, dW, dH);
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.5;
     ctx.setLineDash([6, 3]); ctx.stroke(); ctx.setLineDash([]);
+
+    // bounding box
+    const bb = regionBBox(reg);
+    ctx.strokeStyle = '#60a5fa'; ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.strokeRect(ox + bb.u0*dW, oy + bb.v0*dH,
+                   (bb.u1-bb.u0)*dW, (bb.v1-bb.v0)*dH);
+    ctx.setLineDash([]);
+
+    // 8 scale/stretch handles
+    for (const h of getBBoxHandles(reg)) {
+      const px = ox + h.u * dW, py = oy + h.v * dH;
+      const size = 8;
+      ctx.beginPath();
+      ctx.rect(px - size/2, py - size/2, size, size);
+      ctx.fillStyle = '#fff'; ctx.fill();
+      ctx.strokeStyle = '#60a5fa'; ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
   }
 
   // ── Point-edit 툴: 선택된 도형 강조 + 핸들 표시 ─────
