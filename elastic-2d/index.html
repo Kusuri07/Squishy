@@ -462,6 +462,7 @@
         <span class="val" id="cutout-brush-val">40</span>
       </div>
       <div class="cutout-actions">
+        <button id="cutout-to-shape" title="누낀 부분을 도형(영역)으로 추가">✚ 도형으로</button>
         <button id="cutout-invert" title="마스크 반전">반전</button>
         <button id="cutout-reset" class="danger" title="누끼를 지우고 원본으로">초기화</button>
       </div>
@@ -1897,6 +1898,10 @@ function dlReportProgress(key, current, total) {
     dlState.prevDone = done;
     dlState.prevTime = now;
   }
+  // Don't pop the heavy UI if everything completes within the first 600ms
+  // (e.g. browser HTTP cache served files instantly on a re-run).
+  const elapsed = now - dlState.startTime;
+  if (elapsed < 600 && done >= sum && sum > 0) return;
   // throttle UI to ~5fps
   if (now - dlState.lastUiUpdate < 200 && done < sum) return;
   dlState.lastUiUpdate = now;
@@ -2142,6 +2147,17 @@ async function imageToBlob(img) {
   return await new Promise(res => c.toBlob(res, 'image/png'));
 }
 
+// SHA-256 hash of an image (so we can cache ML results per source image).
+async function hashImageBlob(blob) {
+  const buf = await blob.arrayBuffer();
+  const h = await crypto.subtle.digest('SHA-256', buf);
+  return Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Cache ML result mask in-memory keyed by image hash. Avoids re-running
+// inference (and re-fetching cached model files) on a repeat click.
+let _mlResultCache = null; // { imgHash: string, maskDataUrl: string }
+
 async function runMlCutout() {
   if (cutoutMlBusy || !loadedImage || !cutoutMask) return;
   cutoutMlBusy = true;
@@ -2149,8 +2165,19 @@ async function runMlCutout() {
   dlReset();
   showCutoutStatus('ML 모듈 로딩 중…');
   try {
-    const mod = await loadBgRemoval();
     const blob = await imageToBlob(loadedImage);
+    const imgHash = await hashImageBlob(blob);
+
+    // Cache hit → instant reuse, no library call (and therefore no fetch UI)
+    if (_mlResultCache && _mlResultCache.imgHash === imgHash) {
+      pushHistory();
+      await new Promise(res => loadCutoutFromDataUrl(_mlResultCache.maskDataUrl, res));
+      showCutoutStatus('완료 (캐시 재사용)');
+      setTimeout(() => showCutoutStatus(''), 1200);
+      return;
+    }
+
+    const mod = await loadBgRemoval();
     const removeBg = mod.removeBackground || mod.default?.removeBackground || mod.default;
     if (typeof removeBg !== 'function') throw new Error('removeBackground export not found');
     const cfg = {
@@ -2186,6 +2213,7 @@ async function runMlCutout() {
     mctx.putImageData(mid, 0, 0);
     cutoutHasContent = true;
     refreshCutoutDisplay();
+    _mlResultCache = { imgHash, maskDataUrl: getCutoutDataUrl() };
     showCutoutStatus('완료');
     setTimeout(() => showCutoutStatus(''), 1200);
   } catch (err) {
@@ -2197,6 +2225,140 @@ async function runMlCutout() {
     dlFinish();
     document.getElementById('cutout-ml-btn').disabled = false;
   }
+}
+
+// ── Mask → polygon regions (so cutouts can be treated as shapes) ────
+// Moore-neighbour boundary trace from a starting kept pixel.
+function _mooreTrace(getKept, sx, sy, maxSteps) {
+  const dx = [0, 1, 1, 1, 0, -1, -1, -1];   // 0:N, 1:NE, 2:E ... clockwise
+  const dy = [-1, -1, 0, 1, 1,  1,  0, -1];
+  const out = [{ x: sx, y: sy }];
+  let cx = sx, cy = sy;
+  let backtrack = 6;                        // entered from the west
+  let steps = 0;
+  while (steps++ < maxSteps) {
+    let found = false;
+    const start = (backtrack + 1) % 8;
+    for (let i = 0; i < 8; i++) {
+      const dir = (start + i) % 8;
+      const nx = cx + dx[dir], ny = cy + dy[dir];
+      if (getKept(nx, ny)) {
+        cx = nx; cy = ny;
+        backtrack = (dir + 4) % 8;
+        out.push({ x: cx, y: cy });
+        found = true;
+        break;
+      }
+    }
+    if (!found) break;
+    if (cx === sx && cy === sy && out.length > 2) break;
+  }
+  return out;
+}
+
+// Douglas-Peucker polyline simplification (keeps endpoints).
+function _simplifyPolyline(pts, eps) {
+  if (pts.length < 3) return pts.slice();
+  const e2 = eps * eps;
+  const distSq = (p, a, b) => {
+    const ax = b.x - a.x, ay = b.y - a.y;
+    if (ax === 0 && ay === 0) return (p.x-a.x)**2 + (p.y-a.y)**2;
+    const t = Math.max(0, Math.min(1,
+      ((p.x-a.x)*ax + (p.y-a.y)*ay) / (ax*ax + ay*ay)));
+    const px = a.x + t*ax, py = a.y + t*ay;
+    return (p.x-px)**2 + (p.y-py)**2;
+  };
+  const out = [pts[0]];
+  (function rdp(first, last) {
+    let maxD = 0, idx = -1;
+    for (let i = first + 1; i < last; i++) {
+      const d = distSq(pts[i], pts[first], pts[last]);
+      if (d > maxD) { maxD = d; idx = i; }
+    }
+    if (maxD > e2 && idx > 0) {
+      rdp(first, idx);
+      rdp(idx, last);
+    } else {
+      out.push(pts[last]);
+    }
+  })(0, pts.length - 1);
+  return out;
+}
+
+// Find every kept connected component in the mask, trace its boundary,
+// and return polygons in UV space. Each polygon is closed (first ≠ last).
+function maskToPolygons(minPixels = 200) {
+  if (!cutoutMask || !cutoutHasContent) return [];
+  const W = cutoutImageW, H = cutoutImageH;
+  const ctx = cutoutMask.getContext('2d');
+  const id  = ctx.getImageData(0, 0, W, H).data;
+  const isKept = (x, y) =>
+    x >= 0 && x < W && y >= 0 && y < H && id[(y*W + x) * 4 + 3] >= 128;
+  const visited = new Uint8Array(W * H);
+  const polys = [];
+  const eps = Math.max(1.5, Math.min(W, H) * 0.0035);
+  const stack = new Int32Array(W * H);
+
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const p = y * W + x;
+      if (visited[p]) continue;
+      if (!isKept(x, y)) { visited[p] = 1; continue; }
+      // Flood-fill the component to mark pixels (and count them).
+      let sp = 0; stack[sp++] = p; visited[p] = 1;
+      let count = 0;
+      while (sp > 0) {
+        const q  = stack[--sp];
+        count++;
+        const qx = q % W, qy = (q - qx) / W;
+        if (qx > 0   && !visited[q-1] && isKept(qx-1, qy))  { visited[q-1] = 1; stack[sp++] = q-1; }
+        if (qx < W-1 && !visited[q+1] && isKept(qx+1, qy))  { visited[q+1] = 1; stack[sp++] = q+1; }
+        if (qy > 0   && !visited[q-W] && isKept(qx, qy-1))  { visited[q-W] = 1; stack[sp++] = q-W; }
+        if (qy < H-1 && !visited[q+W] && isKept(qx, qy+1))  { visited[q+W] = 1; stack[sp++] = q+W; }
+      }
+      if (count < minPixels) continue;
+      // Trace outer boundary starting from this leftmost-topmost kept pixel.
+      const boundary = _mooreTrace(isKept, x, y, W * H * 4);
+      if (boundary.length < 4) continue;
+      const simp = _simplifyPolyline(boundary, eps);
+      // Polygon regions store points without an explicit closing vertex.
+      if (simp.length > 1 && simp[0].x === simp[simp.length-1].x
+                          && simp[0].y === simp[simp.length-1].y) {
+        simp.pop();
+      }
+      if (simp.length < 3) continue;
+      polys.push(simp.map(p => ({ u: p.x / W, v: p.y / H })));
+    }
+  }
+  return polys;
+}
+
+// Bake the current mask into one or more polygon regions.
+function bakeCutoutToRegions() {
+  if (!cutoutMask || !cutoutHasContent) {
+    showCutoutStatus('누낄 영역이 없습니다');
+    setTimeout(() => showCutoutStatus(''), 1500);
+    return;
+  }
+  const polys = maskToPolygons(200);
+  if (polys.length === 0) {
+    showCutoutStatus('도형으로 만들 영역을 찾지 못했습니다');
+    setTimeout(() => showCutoutStatus(''), 2000);
+    return;
+  }
+  pushHistory();
+  for (const points of polys) {
+    const baseProps = buildBaseRegionProps();
+    const reg = { shape: 'polygon', points, closed: true, ...baseProps, label: '누끼' };
+    assignAutoLabel(reg);
+    appRegions.push(reg);
+  }
+  highlightedRegionIdx = appRegions.length - 1;
+  renderRegionsList();
+  redrawRegionCanvas();
+  redrawEditorOverlay();
+  showCutoutStatus(`도형 ${polys.length}개 추가됨`);
+  setTimeout(() => showCutoutStatus(''), 1500);
 }
 
 // ── Cutout panel UI bindings ────────────────────────────────────────
@@ -2223,6 +2385,7 @@ document.getElementById('cutout-brush').addEventListener('input', e => {
   redrawEditorOverlay();
 });
 document.getElementById('cutout-ml-btn').addEventListener('click', runMlCutout);
+document.getElementById('cutout-to-shape').addEventListener('click', bakeCutoutToRegions);
 document.getElementById('cutout-reset').addEventListener('click', () => {
   if (!cutoutHasContent) return;
   pushHistory();
