@@ -131,10 +131,25 @@
     }
     #cutout-status {
       position:absolute; top:60px; left:50%; transform:translateX(-50%);
-      background:rgba(15,23,42,.95); border:1px solid #374151;
-      border-radius:8px; padding:6px 12px; font-size:.78rem; color:#e5e7eb;
-      z-index:30; display:none;
+      background:rgba(15,23,42,.96); border:1px solid #374151;
+      border-radius:10px; padding:10px 14px; font-size:.78rem; color:#e5e7eb;
+      z-index:30; display:none; min-width:280px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.35);
     }
+    #cutout-status .cs-title { font-weight:600; margin-bottom:6px; }
+    #cutout-status .cs-bar {
+      height: 8px; background:#1f2937; border-radius: 4px; overflow:hidden; margin: 6px 0;
+    }
+    #cutout-status .cs-bar > div {
+      height: 100%; background: linear-gradient(90deg,#6366f1,#a855f7);
+      width: 0%; transition: width .15s linear;
+    }
+    #cutout-status .cs-meta {
+      display:flex; justify-content:space-between;
+      color:#9ca3af; font-size:.7rem;
+    }
+    #cutout-status .cs-key { color:#6b7280; font-size:.66rem; margin-top:4px;
+      overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 
     /* ── Editor toolbar ── */
     #editor-toolbar {
@@ -1829,6 +1844,82 @@ function showCutoutStatus(text) {
   cutoutStatus.style.display = 'block';
 }
 
+// ── ML download progress (bytes, speed, ETA, tab title) ────────────
+const dlState = {
+  startTime: 0, prevTime: 0, prevDone: 0,
+  files: {},          // key -> { current, total }
+  speedSmooth: 0,
+  lastUiUpdate: 0,
+  origTitle: ''
+};
+function _fmtBytes(b) {
+  if (!isFinite(b) || b <= 0) return '0 B';
+  if (b < 1024)        return b.toFixed(0) + ' B';
+  if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+  return (b / 1024 / 1024).toFixed(1) + ' MB';
+}
+function _fmtSpeed(bps) { return _fmtBytes(bps) + '/s'; }
+function _fmtEta(s) {
+  if (!isFinite(s) || s <= 0) return '--';
+  if (s < 1)  return '< 1초';
+  if (s < 60) return Math.round(s) + '초';
+  const m = Math.floor(s / 60), r = Math.round(s - m * 60);
+  return `${m}분 ${r}초`;
+}
+function dlReset() {
+  const now = performance.now();
+  dlState.startTime = now;
+  dlState.prevTime  = now;
+  dlState.prevDone  = 0;
+  dlState.files     = {};
+  dlState.speedSmooth = 0;
+  dlState.lastUiUpdate = 0;
+  dlState.origTitle = document.title || 'Elastic 2D';
+}
+function dlFinish() {
+  document.title = dlState.origTitle || document.title;
+}
+function dlReportProgress(key, current, total) {
+  if (total > 0) dlState.files[key] = { current: Math.min(current, total), total };
+  let done = 0, sum = 0;
+  for (const k in dlState.files) {
+    done += dlState.files[k].current;
+    sum  += dlState.files[k].total;
+  }
+  const now = performance.now();
+  const dt  = (now - dlState.prevTime) / 1000;
+  // recompute speed every ~0.25s
+  if (dt >= 0.25) {
+    const inst = (done - dlState.prevDone) / dt;
+    dlState.speedSmooth = dlState.speedSmooth
+      ? dlState.speedSmooth * 0.6 + inst * 0.4
+      : inst;
+    dlState.prevDone = done;
+    dlState.prevTime = now;
+  }
+  // throttle UI to ~5fps
+  if (now - dlState.lastUiUpdate < 200 && done < sum) return;
+  dlState.lastUiUpdate = now;
+
+  const pct   = sum > 0 ? (done / sum) * 100 : 0;
+  const speed = dlState.speedSmooth;
+  const eta   = (sum > done && speed > 0) ? (sum - done) / speed : 0;
+  const pctStr = pct.toFixed(1);
+
+  document.title = `[${pctStr}%] ML 모델 다운로드 — ${dlState.origTitle}`;
+
+  const shortKey = (key || '').split('/').pop().slice(-40);
+  cutoutStatus.innerHTML = `
+    <div class="cs-title">✨ ML 누끼 모델 다운로드 중…</div>
+    <div class="cs-bar"><div style="width:${pctStr}%"></div></div>
+    <div class="cs-meta">
+      <span>${pctStr}% · ${_fmtBytes(done)} / ${_fmtBytes(sum)}</span>
+      <span>${_fmtSpeed(speed)} · ETA ${_fmtEta(eta)}</span>
+    </div>
+    <div class="cs-key">${shortKey}</div>`;
+  cutoutStatus.style.display = 'block';
+}
+
 function initCutoutMask(img) {
   cutoutImageW = img.naturalWidth;
   cutoutImageH = img.naturalHeight;
@@ -2055,18 +2146,15 @@ async function runMlCutout() {
   if (cutoutMlBusy || !loadedImage || !cutoutMask) return;
   cutoutMlBusy = true;
   document.getElementById('cutout-ml-btn').disabled = true;
-  showCutoutStatus('ML 모델 로드 중…');
+  dlReset();
+  showCutoutStatus('ML 모듈 로딩 중…');
   try {
     const mod = await loadBgRemoval();
     const blob = await imageToBlob(loadedImage);
     const removeBg = mod.removeBackground || mod.default?.removeBackground || mod.default;
     if (typeof removeBg !== 'function') throw new Error('removeBackground export not found');
     const cfg = {
-      progress: (key, current, total) => {
-        if (!total) return;
-        const pct = Math.round((current / total) * 100);
-        showCutoutStatus(`ML 처리: ${key} ${pct}%`);
-      },
+      progress: (key, current, total) => dlReportProgress(key, current, total),
       output: { format: 'image/png' }
     };
     const fgBlob = await removeBg(blob, cfg);
@@ -2106,6 +2194,7 @@ async function runMlCutout() {
     setTimeout(() => showCutoutStatus(''), 3000);
   } finally {
     cutoutMlBusy = false;
+    dlFinish();
     document.getElementById('cutout-ml-btn').disabled = false;
   }
 }
