@@ -442,14 +442,14 @@
     </div>
     <!-- Cutout panel (popover under toolbar) -->
     <div id="cutout-panel">
-      <button id="cutout-ml-btn">✨ ML 자동 누끼 (배경 제거)</button>
+      <button id="cutout-ml-btn">✨ ML 자동 누끼 (캐릭터/배경 분리)</button>
       <div class="cutout-hint" id="cutout-ml-hint">첫 실행 시 모델(약 80MB)을 다운로드합니다.</div>
       <div class="cutout-modes">
         <button class="cutout-mode-btn active" data-mode="auto-color">자동<br>색상</button>
         <button class="cutout-mode-btn"        data-mode="erase">지우개</button>
         <button class="cutout-mode-btn"        data-mode="restore">복원</button>
-        <button class="cutout-mode-btn"        data-mode="lasso-erase">올가미<br>지우기</button>
-        <button class="cutout-mode-btn"        data-mode="lasso-restore">올가미<br>복원</button>
+        <button class="cutout-mode-btn"        data-mode="lasso-shape">올가미<br>도형</button>
+        <button class="cutout-mode-btn"        data-mode="object-select">객체<br>선택</button>
       </div>
       <div class="cutout-row" id="cutout-row-tol">
         <label>임계값</label>
@@ -462,13 +462,14 @@
         <span class="val" id="cutout-brush-val">40</span>
       </div>
       <div class="cutout-actions">
-        <button id="cutout-to-shape" title="누낀 부분을 도형(영역)으로 추가">✚ 도형으로</button>
+        <button id="cutout-to-shape" title="캐릭터(누낀 부분)와 배경을 각각 도형으로 분리 추가">✚ 캐릭터/배경 분리</button>
         <button id="cutout-invert" title="마스크 반전">반전</button>
         <button id="cutout-reset" class="danger" title="누끼를 지우고 원본으로">초기화</button>
       </div>
       <div class="cutout-hint">
         브러시: 드래그해서 지우기/복원<br>
-        올가미: 드래그로 영역 그린 뒤 손 떼면 적용<br>
+        올가미 도형: 드래그로 영역을 그리면 도형이 만들어집니다<br>
+        객체 선택: 마스크가 있는 상태에서 대충 둘러싸면 안의 객체를 자동 추출<br>
         자동 색상: 배경 픽셀을 클릭 (임계값으로 범위 조절)
       </div>
     </div>
@@ -1830,7 +1831,7 @@ let cutoutMask        = null;      // canvas at image natural size; alpha = keep
 let cutoutImageW      = 0;
 let cutoutImageH      = 0;
 let cutoutHasContent  = false;     // true if any pixel has been removed
-let cutoutMode        = 'auto-color';  // auto-color | erase | restore | lasso-erase | lasso-restore
+let cutoutMode        = 'auto-color';  // auto-color | erase | restore | lasso-shape | object-select
 let cutoutBrushSize   = 40;        // pixels in image-space
 let cutoutTolerance   = 30;        // 1..100 → 0..150 RGB distance
 let cutoutBrushDrawing= false;
@@ -2287,13 +2288,17 @@ function _simplifyPolyline(pts, eps) {
 
 // Find every kept connected component in the mask, trace its boundary,
 // and return polygons in UV space. Each polygon is closed (first ≠ last).
-function maskToPolygons(minPixels = 200) {
+function maskToPolygons(minPixels = 200, invert = false) {
   if (!cutoutMask || !cutoutHasContent) return [];
   const W = cutoutImageW, H = cutoutImageH;
   const ctx = cutoutMask.getContext('2d');
   const id  = ctx.getImageData(0, 0, W, H).data;
-  const isKept = (x, y) =>
-    x >= 0 && x < W && y >= 0 && y < H && id[(y*W + x) * 4 + 3] >= 128;
+  // When invert=true, "kept" means the *removed* (background) pixels.
+  const isKept = (x, y) => {
+    if (x < 0 || x >= W || y < 0 || y >= H) return false;
+    const a = id[(y*W + x) * 4 + 3];
+    return invert ? a < 128 : a >= 128;
+  };
   const visited = new Uint8Array(W * H);
   const polys = [];
   const eps = Math.max(1.5, Math.min(W, H) * 0.0035);
@@ -2333,23 +2338,106 @@ function maskToPolygons(minPixels = 200) {
   return polys;
 }
 
-// Bake the current mask into one or more polygon regions.
+// Object-select: within a rough lasso polygon (UV space), find the largest
+// connected "kept" component of the cutout mask and return its boundary as a
+// polygon (UV). Returns null if no component meets the size threshold.
+function pickObjectInLasso(lassoUVs, minPixels = 80) {
+  if (!cutoutMask || !cutoutHasContent) return null;
+  if (!lassoUVs || lassoUVs.length < 3)  return null;
+  const W = cutoutImageW, H = cutoutImageH;
+  const ctx = cutoutMask.getContext('2d');
+  const id  = ctx.getImageData(0, 0, W, H).data;
+
+  // Lasso bbox → restrict scan
+  let u0 = 1, v0 = 1, u1 = 0, v1 = 0;
+  for (const p of lassoUVs) {
+    if (p.u < u0) u0 = p.u; if (p.u > u1) u1 = p.u;
+    if (p.v < v0) v0 = p.v; if (p.v > v1) v1 = p.v;
+  }
+  const x0 = Math.max(0,   Math.floor(u0 * W));
+  const y0 = Math.max(0,   Math.floor(v0 * H));
+  const x1 = Math.min(W-1, Math.ceil (u1 * W));
+  const y1 = Math.min(H-1, Math.ceil (v1 * H));
+
+  // "Kept and inside lasso" predicate.
+  const isKept = (x, y) => {
+    if (x < 0 || x >= W || y < 0 || y >= H) return false;
+    if (id[(y*W + x) * 4 + 3] < 128) return false;
+    return pointInPolygon(lassoUVs, x / W, y / H);
+  };
+
+  // Row-major scan → flood-fill kept components → keep the largest.
+  // The seed pixel of each component is its topmost-leftmost (scan order),
+  // which is exactly what _mooreTrace expects as a starting point.
+  const visited = new Uint8Array(W * H);
+  const stack   = new Int32Array(W * H);
+  let bestStart = null, bestCount = 0;
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const p = y * W + x;
+      if (visited[p]) continue;
+      if (!isKept(x, y)) { visited[p] = 1; continue; }
+      let sp = 0; stack[sp++] = p; visited[p] = 1;
+      let count = 0;
+      while (sp > 0) {
+        const q  = stack[--sp]; count++;
+        const qx = q % W, qy = (q - qx) / W;
+        if (qx > 0   && !visited[q-1] && isKept(qx-1, qy)) { visited[q-1] = 1; stack[sp++] = q-1; }
+        if (qx < W-1 && !visited[q+1] && isKept(qx+1, qy)) { visited[q+1] = 1; stack[sp++] = q+1; }
+        if (qy > 0   && !visited[q-W] && isKept(qx, qy-1)) { visited[q-W] = 1; stack[sp++] = q-W; }
+        if (qy < H-1 && !visited[q+W] && isKept(qx, qy+1)) { visited[q+W] = 1; stack[sp++] = q+W; }
+      }
+      if (count > bestCount && count >= minPixels) {
+        bestCount = count;
+        bestStart = { x, y };
+      }
+    }
+  }
+  if (!bestStart) return null;
+
+  const boundary = _mooreTrace(isKept, bestStart.x, bestStart.y, W * H * 4);
+  if (boundary.length < 4) return null;
+  const eps  = Math.max(1.5, Math.min(W, H) * 0.0035);
+  const simp = _simplifyPolyline(boundary, eps);
+  if (simp.length > 1
+      && simp[0].x === simp[simp.length-1].x
+      && simp[0].y === simp[simp.length-1].y) {
+    simp.pop();
+  }
+  if (simp.length < 3) return null;
+  return simp.map(p => ({ u: p.x / W, v: p.y / H }));
+}
+
+// Bake the current mask into polygon regions for *both* foreground (캐릭터)
+// and background (배경) so each side becomes an independently editable shape.
+// Note: polygons can't have holes, so the background polygon's outer boundary
+// will typically follow the image rectangle and visually overlap the
+// character. The two regions are still independently selectable / editable
+// in the regions panel.
 function bakeCutoutToRegions() {
   if (!cutoutMask || !cutoutHasContent) {
     showCutoutStatus('누낄 영역이 없습니다');
     setTimeout(() => showCutoutStatus(''), 1500);
     return;
   }
-  const polys = maskToPolygons(200);
-  if (polys.length === 0) {
+  const fgPolys = maskToPolygons(200, false);  // 캐릭터 (kept)
+  const bgPolys = maskToPolygons(200, true);   // 배경 (removed)
+  if (fgPolys.length === 0 && bgPolys.length === 0) {
     showCutoutStatus('도형으로 만들 영역을 찾지 못했습니다');
     setTimeout(() => showCutoutStatus(''), 2000);
     return;
   }
   pushHistory();
-  for (const points of polys) {
+  // Push background first so character draws on top in the overlay.
+  for (const points of bgPolys) {
     const baseProps = buildBaseRegionProps();
-    const reg = { shape: 'polygon', points, closed: true, ...baseProps, label: '누끼' };
+    const reg = { shape: 'polygon', points, closed: true, ...baseProps, label: '배경' };
+    assignAutoLabel(reg);
+    appRegions.push(reg);
+  }
+  for (const points of fgPolys) {
+    const baseProps = buildBaseRegionProps();
+    const reg = { shape: 'polygon', points, closed: true, ...baseProps, label: '캐릭터' };
     assignAutoLabel(reg);
     appRegions.push(reg);
   }
@@ -2357,8 +2445,8 @@ function bakeCutoutToRegions() {
   renderRegionsList();
   redrawRegionCanvas();
   redrawEditorOverlay();
-  showCutoutStatus(`도형 ${polys.length}개 추가됨`);
-  setTimeout(() => showCutoutStatus(''), 1500);
+  showCutoutStatus(`캐릭터 ${fgPolys.length}개 / 배경 ${bgPolys.length}개 추가됨`);
+  setTimeout(() => showCutoutStatus(''), 2000);
 }
 
 // ── Cutout panel UI bindings ────────────────────────────────────────
@@ -2366,10 +2454,11 @@ function setCutoutMode(m) {
   cutoutMode = m;
   document.querySelectorAll('#cutout-panel .cutout-mode-btn').forEach(b =>
     b.classList.toggle('active', b.dataset.mode === m));
-  // toggle which row is shown
-  const isAuto = (m === 'auto-color');
-  document.getElementById('cutout-row-tol').style.display   = isAuto ? '' : 'none';
-  document.getElementById('cutout-row-brush').style.display = isAuto ? 'none' : '';
+  // toggle which row is shown — auto: tolerance, brush/restore: brush, lasso: neither
+  const isAuto  = (m === 'auto-color');
+  const isBrush = (m === 'erase' || m === 'restore');
+  document.getElementById('cutout-row-tol').style.display   = isAuto  ? '' : 'none';
+  document.getElementById('cutout-row-brush').style.display = isBrush ? '' : 'none';
   redrawEditorOverlay();
 }
 document.querySelectorAll('#cutout-panel .cutout-mode-btn').forEach(btn => {
@@ -2790,7 +2879,7 @@ overlayCanvas.addEventListener('pointerdown', e => {
       cutoutBrushDrawing = true;
       cutoutBrushLastUV  = { ...uv };
       cutoutBrushAt(uv.u, uv.v, cutoutMode);
-    } else if (cutoutMode === 'lasso-erase' || cutoutMode === 'lasso-restore') {
+    } else if (cutoutMode === 'lasso-shape' || cutoutMode === 'object-select') {
       cutoutLassoPts = [{ u: uv.u, v: uv.v }];
       redrawEditorOverlay();
     }
@@ -3019,10 +3108,59 @@ overlayCanvas.addEventListener('pointerup', () => {
       cutoutBrushDrawing = false;
       cutoutBrushLastUV  = null;
     } else if (cutoutLassoPts && cutoutLassoPts.length >= 3) {
-      pushHistory();
-      cutoutFillPolygon(cutoutLassoPts,
-        cutoutMode === 'lasso-erase' ? 'erase' : 'restore');
-      cutoutLassoPts = null;
+      const lassoCopy = cutoutLassoPts.slice();
+      cutoutLassoPts  = null;
+
+      if (cutoutMode === 'object-select') {
+        // Object-select: lasso defines a search region; we extract the largest
+        // kept blob inside it from the existing cutout mask.
+        if (!cutoutHasContent) {
+          showCutoutStatus('먼저 ✨ ML 자동 누끼 또는 자동 색상으로 마스크를 만들어 주세요');
+          setTimeout(() => showCutoutStatus(''), 2200);
+          redrawEditorOverlay();
+          return;
+        }
+        const points = pickObjectInLasso(lassoCopy, 80);
+        if (!points) {
+          showCutoutStatus('영역 안에서 객체를 찾지 못했습니다');
+          setTimeout(() => showCutoutStatus(''), 2000);
+          redrawEditorOverlay();
+          return;
+        }
+        pushHistory();
+        const baseProps = buildBaseRegionProps();
+        const reg = { shape: 'polygon', points, closed: true, ...baseProps, label: '객체' };
+        assignAutoLabel(reg);
+        appRegions.push(reg);
+        highlightedRegionIdx = appRegions.length - 1;
+        renderRegionsList();
+        redrawRegionCanvas();
+        redrawEditorOverlay();
+        showCutoutStatus('객체 추출 완료');
+        setTimeout(() => showCutoutStatus(''), 1500);
+        return;
+      }
+
+      // lasso-shape (default): the lasso path itself becomes the polygon.
+      const eps  = 0.004;  // ≈ 0.4% of image diagonal
+      const pts  = lassoCopy.map(p => ({ x: p.u, y: p.v }));
+      const simp = _simplifyPolyline(pts, eps);
+      if (simp.length > 1
+          && simp[0].x === simp[simp.length-1].x
+          && simp[0].y === simp[simp.length-1].y) {
+        simp.pop();
+      }
+      if (simp.length >= 3) {
+        pushHistory();
+        const points    = simp.map(p => ({ u: p.x, v: p.y }));
+        const baseProps = buildBaseRegionProps();
+        const reg = { shape: 'polygon', points, closed: true, ...baseProps, label: '올가미' };
+        assignAutoLabel(reg);
+        appRegions.push(reg);
+        highlightedRegionIdx = appRegions.length - 1;
+        renderRegionsList();
+        redrawRegionCanvas();
+      }
       redrawEditorOverlay();
     } else {
       cutoutLassoPts = null;
@@ -3144,11 +3282,12 @@ function redrawEditorOverlay() {
         const px = ox + p.u * dW, py = oy + p.v * dH;
         if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
       });
-      const erase = (cutoutMode === 'lasso-erase');
-      ctx.strokeStyle = erase ? '#ef4444' : '#22c55e';
+      // Lasso preview — blue for direct shape, orange for object-select.
+      const lassoColor = (cutoutMode === 'object-select') ? '#f97316' : '#3b82f6';
+      ctx.strokeStyle = lassoColor;
       ctx.lineWidth = 1.5;
       ctx.setLineDash([5, 4]); ctx.stroke(); ctx.setLineDash([]);
-      ctx.fillStyle = (erase ? '#ef4444' : '#22c55e') + '22';
+      ctx.fillStyle = lassoColor + '22';
       ctx.fill();
     }
     // brush cursor circle (image-px → screen px via dW/imgW)
