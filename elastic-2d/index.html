@@ -162,6 +162,24 @@
       width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0;
     }
     .region-item-header span { flex: 1; }
+    .region-label {
+      cursor: text;
+      padding: 1px 4px;
+      border-radius: 3px;
+      transition: background .15s;
+    }
+    .region-label:hover { background: rgba(255,255,255,.06); }
+    .region-label-edit {
+      flex: 1;
+      font: inherit;
+      color: #f3f4f6;
+      background: #0b1220;
+      border: 1px solid var(--sel-color, #6366f1);
+      border-radius: 3px;
+      padding: 1px 4px;
+      outline: none;
+      min-width: 0;
+    }
     .region-del {
       cursor: pointer; color: #6b7280; font-size: 1rem; line-height: 1;
       padding: 2px 4px; border-radius: 4px;
@@ -2545,6 +2563,45 @@ function sliderToEdgeC(s) { return s === 0 ? 0 : Math.pow(10, _EL + (s / 100) * 
 function restCToSlider(v) { if (v === 0) return 0; return Math.max(1, Math.round(((Math.log10(Math.max(v,1e-6)) - _RL) / (_RH - _RL)) * 100)); }
 function sliderToRestC(s) { return s === 0 ? 0 : Math.pow(10, _RL + (s / 100) * (_RH - _RL)); }
 
+// Inline rename: dblclick a region label to edit it.
+function attachLabelEditor(spanEl, idx, rerender) {
+  spanEl.classList.add('region-label');
+  spanEl.title = '더블클릭하여 이름 변경';
+  spanEl.addEventListener('click', e => e.stopPropagation());
+  spanEl.addEventListener('dblclick', e => {
+    e.stopPropagation();
+    if (!appRegions[idx]) return;
+    const oldLabel = appRegions[idx].label || '';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = oldLabel;
+    input.maxLength = 40;
+    input.className = 'region-label-edit';
+    spanEl.replaceWith(input);
+    input.focus();
+    input.select();
+    let done = false;
+    const commit = save => {
+      if (done) return; done = true;
+      const v = (input.value || '').trim();
+      if (save && v && v !== oldLabel) {
+        pushHistory();
+        appRegions[idx].label = v;
+      }
+      if (rerender) rerender();
+      else { redrawRegionCanvas?.(); redrawEditorOverlay?.(); }
+    };
+    input.addEventListener('keydown', ev => {
+      ev.stopPropagation();   // block global shortcuts (Tab/Delete/etc.)
+      if (ev.key === 'Enter')      { ev.preventDefault(); commit(true);  }
+      else if (ev.key === 'Escape'){ ev.preventDefault(); commit(false); }
+    });
+    input.addEventListener('blur',  () => commit(true));
+    input.addEventListener('click', ev => ev.stopPropagation());
+    input.addEventListener('dblclick', ev => ev.stopPropagation());
+  });
+}
+
 function renderRegionsList() {
   regionsList.innerHTML = '';
   if (appRegions.length === 0) {
@@ -2564,7 +2621,7 @@ function renderRegionsList() {
     div.innerHTML = `
       <div class="region-item-header">
         <div class="region-dot" style="background:${reg.color}"></div>
-        <span>${reg.label}</span>
+        <span class="region-label-text">${reg.label}</span>
         <span class="region-del" data-idx="${idx}">&#xd7;</span>
       </div>
       <div class="region-sliders">
@@ -2588,6 +2645,11 @@ function renderRegionsList() {
         </div>
       </div>`;
     regionsList.appendChild(div);
+
+    // inline rename on label dblclick
+    attachLabelEditor(div.querySelector('.region-label-text'), idx, () => {
+      renderRegionsList(); redrawRegionCanvas?.(); redrawEditorOverlay?.();
+    });
 
     // clicking the row selects the region in edit mode
     div.addEventListener('click', e => {
@@ -2858,7 +2920,7 @@ function renderSimParamsList() {
     div.innerHTML = `
       <div class="region-item-header">
         <div class="region-dot" style="background:${reg.color}"></div>
-        <span>${reg.label}</span>
+        <span class="region-label-text">${reg.label}</span>
       </div>
       <div class="region-sliders">
         <div class="rslider-row">
@@ -2878,6 +2940,11 @@ function renderSimParamsList() {
         </div>
       </div>`;
     container.appendChild(div);
+
+    // inline rename on label dblclick
+    attachLabelEditor(div.querySelector('.region-label-text'), idx, () => {
+      renderSimParamsList();
+    });
 
     const edgeSlider = div.querySelector('.r-edge-s');
     const edgeVal    = div.querySelector('.r-edge-v');
