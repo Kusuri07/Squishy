@@ -1601,6 +1601,19 @@ let loadedImageName = null;    // original file basename, for export filename
 // FPS tracking
 let frameCount = 0, lastFpsTime = performance.now();
 
+// Safe DOM event binding for optional UI controls. A stale/conflict-resolved
+// index.html can otherwise stop the whole editor with "null.addEventListener".
+function onId(id, type, handler, options) {
+  const el = document.getElementById(id);
+  if (!el) {
+    console.warn(`[elastic-2d] Missing #${id}; skipped ${type} listener`);
+    return null;
+  }
+  el.addEventListener(type, handler, options);
+  return el;
+}
+
+
 // ═══════════════════════════════════════════════
 //  UPLOAD SCREEN
 // ═══════════════════════════════════════════════
@@ -1622,7 +1635,7 @@ dropZone.addEventListener('drop', e => {
 });
 
 // Upload-screen secondary action: open .json picker
-document.getElementById('upload-secondary').addEventListener('click', pickProjectFile);
+onId('upload-secondary', 'click', pickProjectFile);
 
 function _revokeIfBlobUrl(url) {
   if (url && typeof url === 'string' && url.startsWith('blob:')) URL.revokeObjectURL(url);
@@ -1710,7 +1723,7 @@ function setPreset(p) {
   document.getElementById('tool-shape-icon').textContent = SHAPE_ICONS[p] || '●';
 }
 
-document.getElementById('tool-shape').addEventListener('click', () => {
+onId('tool-shape', 'click', () => {
   if (currentTool === 'shape') toggleShapePalette();
   else { setTool('shape'); openShapePalette(); }
 });
@@ -1721,10 +1734,10 @@ document.querySelectorAll('.shape-cell').forEach(cell => {
     closeShapePalette();
   });
 });
-document.getElementById('tool-polygon').addEventListener('click', () => setTool('polygon'));
-document.getElementById('tool-move'   ).addEventListener('click', () => setTool('move'));
-document.getElementById('tool-edit'   ).addEventListener('click', () => setTool('edit'));
-document.getElementById('tool-cutout' ).addEventListener('click', () => setTool('cutout'));
+onId('tool-polygon', 'click', () => setTool('polygon'));
+onId('tool-move', 'click', () => setTool('move'));
+onId('tool-edit', 'click', () => setTool('edit'));
+onId('tool-cutout', 'click', () => setTool('cutout'));
 
 // click elsewhere closes palette
 document.addEventListener('click', e => {
@@ -2598,23 +2611,23 @@ function setCutoutMode(m) {
 document.querySelectorAll('#cutout-panel .cutout-mode-btn').forEach(btn => {
   btn.addEventListener('click', () => setCutoutMode(btn.dataset.mode));
 });
-document.getElementById('cutout-tolerance').addEventListener('input', e => {
+onId('cutout-tolerance', 'input', e => {
   cutoutTolerance = parseInt(e.target.value);
   document.getElementById('cutout-tolerance-val').textContent = cutoutTolerance;
 });
-document.getElementById('cutout-brush').addEventListener('input', e => {
+onId('cutout-brush', 'input', e => {
   cutoutBrushSize = parseInt(e.target.value);
   document.getElementById('cutout-brush-val').textContent = cutoutBrushSize;
   redrawEditorOverlay();
 });
-document.getElementById('cutout-ml-btn').addEventListener('click', runMlCutout);
-document.getElementById('cutout-to-shape').addEventListener('click', bakeCutoutToRegions);
-document.getElementById('cutout-reset').addEventListener('click', () => {
+onId('cutout-ml-btn', 'click', runMlCutout);
+onId('cutout-to-shape', 'click', bakeCutoutToRegions);
+onId('cutout-reset', 'click', () => {
   if (!cutoutHasContent) return;
   pushHistory();
   clearCutoutMask();
 });
-document.getElementById('cutout-invert').addEventListener('click', () => {
+onId('cutout-invert', 'click', () => {
   if (!cutoutMask) return;
   pushHistory();
   invertCutoutMask();
@@ -3871,7 +3884,7 @@ window.addEventListener('resize', () => {
 // ═══════════════════════════════════════════════
 //  START SIMULATION
 // ═══════════════════════════════════════════════
-document.getElementById('btn-start').addEventListener('click', () => {
+onId('btn-start', 'click', () => {
   if (!loadedImage) return;
   startSimulation(composeMaskedImageCanvas() || loadedImage);
 });
@@ -4104,7 +4117,7 @@ function renderSimParamsList() {
   });
 }
 
-document.getElementById('btn-params').addEventListener('click', () => {
+onId('btn-params', 'click', () => {
   const panel  = document.getElementById('sim-params-panel');
   const btn    = document.getElementById('btn-params');
   const isOpen = panel.style.display === 'flex';
@@ -4118,12 +4131,12 @@ document.getElementById('btn-params').addEventListener('click', () => {
   }
 });
 
-document.getElementById('btn-close-params').addEventListener('click', () => {
+onId('btn-close-params', 'click', () => {
   document.getElementById('sim-params-panel').style.display = 'none';
   document.getElementById('btn-params').classList.remove('active');
 });
 
-document.getElementById('btn-edit-regions').addEventListener('click', () => {
+onId('btn-edit-regions', 'click', () => {
   document.getElementById('canvas-container').style.display   = 'none';
   document.getElementById('sim-hud').style.display            = 'none';
   document.getElementById('region-overlay-sim').style.display = 'none';
@@ -4134,7 +4147,7 @@ document.getElementById('btn-edit-regions').addEventListener('click', () => {
   renderRegionsList();   // 슬라이더 값 최신화
 });
 
-document.getElementById('btn-reset-sim').addEventListener('click', () => {
+onId('btn-reset-sim', 'click', () => {
   if (softbody) softbody.resetToRest();
 });
 
@@ -4152,7 +4165,7 @@ function applyRegionOverlayVisibility() {
     btn.textContent = showRegionOverlay ? '영역 표시' : '영역 숨김';
   }
 }
-document.getElementById('btn-toggle-overlay').addEventListener('click', () => {
+onId('btn-toggle-overlay', 'click', () => {
   showRegionOverlay = !showRegionOverlay;
   applyRegionOverlayVisibility();
 });
@@ -4169,13 +4182,17 @@ window.addEventListener('keydown', e => {
 // Drag-limit slider — live update grabber.maxDrag
 const dragLimitSlider = document.getElementById('drag-limit-slider');
 const dragLimitVal    = document.getElementById('drag-limit-val');
-dragLimitSlider.addEventListener('input', () => {
-  const pct = parseInt(dragLimitSlider.value);
-  dragLimitVal.textContent = pct + '%';
-  if (grabber && grabber.minDim) {
-    grabber.maxDrag = grabber.minDim * (pct / 100);
-  }
-});
+if (dragLimitSlider) {
+  dragLimitSlider.addEventListener('input', () => {
+    const pct = parseInt(dragLimitSlider.value);
+    if (dragLimitVal) dragLimitVal.textContent = pct + '%';
+    if (grabber && grabber.minDim) {
+      grabber.maxDrag = grabber.minDim * (pct / 100);
+    }
+  });
+} else {
+  console.warn('[elastic-2d] Missing #drag-limit-slider; skipped input listener');
+}
 
 document.querySelectorAll('.hud-btn[data-substeps]').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -4187,7 +4204,7 @@ document.querySelectorAll('.hud-btn[data-substeps]').forEach(btn => {
   });
 });
 
-document.getElementById('btn-reset-editor').addEventListener('click', () => {
+onId('btn-reset-editor', 'click', () => {
   document.getElementById('editor-screen').style.display      = 'none';
   document.getElementById('canvas-container').style.display   = 'none';
   document.getElementById('sim-hud').style.display            = 'none';
@@ -4333,9 +4350,9 @@ function applyProject(project) {
   img.src = project.image;
 }
 
-document.getElementById('btn-export').addEventListener('click', exportProject);
-document.getElementById('btn-import-editor').addEventListener('click', pickProjectFile);
-document.getElementById('btn-export-html').addEventListener('click', exportStandaloneHtml);
+onId('btn-export', 'click', exportProject);
+onId('btn-import-editor', 'click', pickProjectFile);
+onId('btn-export-html', 'click', exportStandaloneHtml);
 
 // ═══════════════════════════════════════════════
 //  VIEW-ONLY BOOT (URL ?project=… or embedded JSON)
