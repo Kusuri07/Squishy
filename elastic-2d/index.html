@@ -134,6 +134,7 @@
       background:rgba(15,23,42,.96); border:1px solid #374151;
       border-radius:10px; padding:10px 14px; font-size:.78rem; color:#e5e7eb;
       z-index:30; display:none; min-width:280px;
+      white-space: pre-line;
       box-shadow: 0 8px 24px rgba(0,0,0,.35);
     }
     #cutout-status .cs-title { font-weight:600; margin-bottom:6px; }
@@ -2136,11 +2137,41 @@ function loadCutoutFromDataUrl(url, cb) {
 }
 
 // ── ML auto-cutout via @imgly/background-removal (lazy CDN load) ────
+const IMGLY_BG_REMOVAL_VERSION = '1.5.5';
+const IMGLY_BG_REMOVAL_MODULE_URL =
+  `https://cdn.jsdelivr.net/npm/@imgly/background-removal@${IMGLY_BG_REMOVAL_VERSION}/+esm`;
+const IMGLY_BG_REMOVAL_ASSET_PATH =
+  `https://staticimgly.com/@imgly/background-removal-data/${IMGLY_BG_REMOVAL_VERSION}/dist/`;
+
 function loadBgRemoval() {
   if (_bgRemovalPromise) return _bgRemovalPromise;
-  _bgRemovalPromise = import('https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.5.5/+esm')
+  _bgRemovalPromise = import(IMGLY_BG_REMOVAL_MODULE_URL)
     .catch(err => { _bgRemovalPromise = null; throw err; });
   return _bgRemovalPromise;
+}
+
+function buildBgRemovalConfig() {
+  return {
+    // Use an absolute HTTPS asset path. Without this, file:// launches and some
+    // lightweight static servers can make the library look for ONNX/WASM assets
+    // in the wrong place, which surfaces as "no available backend found".
+    publicPath: IMGLY_BG_REMOVAL_ASSET_PATH,
+    // CPU/WASM is the most predictable backend across ordinary Chrome installs.
+    device: 'cpu',
+    // Avoid worker URL edge cases when the app is opened from file:// or a very
+    // simple local static server. The model still runs locally in the browser.
+    proxyToWorker: false,
+    progress: (key, current, total) => dlReportProgress(key, current, total),
+    output: { format: 'image/png' }
+  };
+}
+
+function formatMlError(err) {
+  const msg = err && err.message ? err.message : String(err);
+  if (/Failed to fetch|no available backend|publicPath|Load failed|Importing a module script failed/i.test(msg)) {
+    return msg + '\n\n확인할 것: http://127.0.0.1:8000/index.html처럼 서버 주소로 열고, jsDelivr/staticimgly CDN 접속이 차단되어 있지 않은지 확인하세요.';
+  }
+  return msg;
 }
 
 async function imageToBlob(img) {
@@ -2183,11 +2214,7 @@ async function runMlCutout() {
     const mod = await loadBgRemoval();
     const removeBg = mod.removeBackground || mod.default?.removeBackground || mod.default;
     if (typeof removeBg !== 'function') throw new Error('removeBackground export not found');
-    const cfg = {
-      progress: (key, current, total) => dlReportProgress(key, current, total),
-      output: { format: 'image/png' }
-    };
-    const fgBlob = await removeBg(blob, cfg);
+    const fgBlob = await removeBg(blob, buildBgRemovalConfig());
     const fgImg  = await new Promise((res, rej) => {
       const im = new Image();
       im.onload = () => res(im);
@@ -2221,7 +2248,7 @@ async function runMlCutout() {
     setTimeout(() => showCutoutStatus(''), 1200);
   } catch (err) {
     console.error('[cutout-ml]', err);
-    showCutoutStatus('ML 누끼 실패: ' + (err.message || err));
+    showCutoutStatus('ML 누끼 실패: ' + formatMlError(err));
     setTimeout(() => showCutoutStatus(''), 3000);
   } finally {
     cutoutMlBusy = false;
@@ -2489,11 +2516,7 @@ async function runMlLassoSegment(lassoUVs) {
     const mod = await loadBgRemoval();
     const removeBg = mod.removeBackground || mod.default?.removeBackground || mod.default;
     if (typeof removeBg !== 'function') throw new Error('removeBackground export not found');
-    const cfg = {
-      progress: (key, current, total) => dlReportProgress(key, current, total),
-      output: { format: 'image/png' }
-    };
-    const fgBlob = await removeBg(cropBlob, cfg);
+    const fgBlob = await removeBg(cropBlob, buildBgRemovalConfig());
     const fgImg  = await new Promise((res, rej) => {
       const im = new Image();
       im.onload = () => res(im); im.onerror = rej;
@@ -2551,7 +2574,7 @@ async function runMlLassoSegment(lassoUVs) {
     setTimeout(() => showCutoutStatus(''), 1500);
   } catch (err) {
     console.error('[cutout-ml-lasso]', err);
-    showCutoutStatus('ML 올가미 실패: ' + (err.message || err));
+    showCutoutStatus('ML 올가미 실패: ' + formatMlError(err));
     setTimeout(() => showCutoutStatus(''), 3000);
   } finally {
     cutoutMlBusy = false;
@@ -2762,26 +2785,46 @@ function findHandleAt(reg, u, v, thresholdPx = 9) {
 }
 
 function getImageRect() {
-  // Read the ACTUAL rendered image rect from the browser layout.
-  // This is always correct regardless of aspect ratio or display scaling.
+  // Prefer the actual rendered image rect from browser layout.
   const wR = document.getElementById('editor-canvas-wrap').getBoundingClientRect();
   const iR = editorImg.getBoundingClientRect();
-  return {
-    ox: iR.left - wR.left,
-    oy: iR.top  - wR.top,
-    dW: iR.width,
-    dH: iR.height
-  };
+  let ox = iR.left - wR.left;
+  let oy = iR.top  - wR.top;
+  let dW = iR.width;
+  let dH = iR.height;
+
+  // Fallback for the brief moment after an image is selected but before layout has
+  // produced a non-zero <img> rect. This keeps the editor usable instead of
+  // turning every click into UV (0,0).
+  if ((!dW || !dH) && loadedImage && loadedImage.naturalWidth && loadedImage.naturalHeight && wR.width && wR.height) {
+    const imgAspect  = loadedImage.naturalWidth / loadedImage.naturalHeight;
+    const wrapAspect = wR.width / wR.height;
+    if (wrapAspect > imgAspect) {
+      dH = wR.height;
+      dW = dH * imgAspect;
+    } else {
+      dW = wR.width;
+      dH = dW / imgAspect;
+    }
+    ox = (wR.width  - dW) / 2;
+    oy = (wR.height - dH) / 2;
+  }
+
+  return { ox, oy, dW, dH };
 }
 
-function clientToImgUV(cx, cy) {
+function clamp01(x) {
+  return Math.max(0, Math.min(1, x));
+}
+
+function clientToImgUV(cx, cy, opts = {}) {
   const wrap = document.getElementById('editor-canvas-wrap');
   const wR   = wrap.getBoundingClientRect();
   const { ox, oy, dW, dH } = getImageRect();
-  return {
-    u: (cx - wR.left - ox) / dW,
-    v: (cy - wR.top  - oy) / dH
-  };
+  const u = dW ? (cx - wR.left - ox) / dW : 0;
+  const v = dH ? (cy - wR.top  - oy) / dH : 0;
+  if (opts.clamp) return { u: clamp01(u), v: clamp01(v) };
+  return { u, v };
 }
 
 // ─── Region creation helpers ────────────────────────────────────────
@@ -2978,7 +3021,11 @@ function finalisePolygonDraft() {
 // ─── Pointer event dispatch ─────────────────────────────────────────
 overlayCanvas.addEventListener('pointerdown', e => {
   overlayCanvas.setPointerCapture(e.pointerId);
-  const uv = clientToImgUV(e.clientX, e.clientY);
+  // Be permissive here: browser zoom, sub-pixel layout, or an image that has just
+  // finished loading can produce UVs a hair outside 0..1 even when the pointer is
+  // visually over the image. Clamping keeps shape creation responsive instead of
+  // silently dropping the gesture.
+  const uv = clientToImgUV(e.clientX, e.clientY, { clamp: true });
 
   // ── Cutout tool ────────────────────────────────────────────────
   if (currentTool === 'cutout') {
@@ -3107,7 +3154,7 @@ overlayCanvas.addEventListener('pointerdown', e => {
 });
 
 overlayCanvas.addEventListener('pointermove', e => {
-  const uv = clientToImgUV(e.clientX, e.clientY);
+  const uv = clientToImgUV(e.clientX, e.clientY, { clamp: true });
   // track cursor in canvas coords for cutout brush ring
   const r = overlayCanvas.getBoundingClientRect();
   overlayCanvas._lastMove = { x: e.clientX - r.left, y: e.clientY - r.top };
@@ -3290,11 +3337,25 @@ overlayCanvas.addEventListener('pointerup', () => {
     if (!drawing) return;
     drawing = false;
     if (drawStart && drawCurrent) {
-      const u0 = Math.min(drawStart.u, drawCurrent.u);
-      const v0 = Math.min(drawStart.v, drawCurrent.v);
-      const u1 = Math.max(drawStart.u, drawCurrent.u);
-      const v1 = Math.max(drawStart.v, drawCurrent.v);
-      if ((u1 - u0) > 0.01 && (v1 - v0) > 0.01) {
+      let u0 = Math.min(drawStart.u, drawCurrent.u);
+      let v0 = Math.min(drawStart.v, drawCurrent.v);
+      let u1 = Math.max(drawStart.u, drawCurrent.u);
+      let v1 = Math.max(drawStart.v, drawCurrent.v);
+      const draggedEnough = (u1 - u0) > 0.01 && (v1 - v0) > 0.01;
+      if (!draggedEnough) {
+        // A plain click now creates a small default shape. This prevents the
+        // tool from feeling broken when users select the circle/shape button and
+        // click instead of dragging a rectangle.
+        const size = 0.08;
+        const aspect = Math.max(0.2, Math.min(5, getImageRect().dW / Math.max(1, getImageRect().dH)));
+        const halfU = size / 2;
+        const halfV = (size * aspect) / 2;
+        u0 = clamp01(drawStart.u - halfU);
+        u1 = clamp01(drawStart.u + halfU);
+        v0 = clamp01(drawStart.v - halfV);
+        v1 = clamp01(drawStart.v + halfV);
+      }
+      if ((u1 - u0) > 0.002 && (v1 - v0) > 0.002) {
         pushHistory();
         appRegions.push(
           makePathRegion(currentPreset, u0, v0, u1, v1, buildBaseRegionProps())
