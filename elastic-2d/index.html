@@ -1679,6 +1679,33 @@ customSlider.addEventListener('input', () => {
 // 'shape' (draw preset via bbox drag) | 'polygon' | 'move' | 'edit'
 let currentTool  = 'shape';
 let currentPreset = 'ellipse';
+
+// These interaction states are used by setTool(), which can be triggered as
+// soon as toolbar listeners are attached. Keep them above setTool() to avoid
+// temporal-dead-zone ReferenceErrors if a stale/partially-initialized page lets
+// the user click before the rest of the script has run.
+let drawing = false, drawStart = null, drawCurrent = null;
+let polygonDraft = null;
+let moveSelectedIdx = -1;
+let movingIdx    = -1;
+let moveStartUV  = null;
+let moveOrigBase = null;
+let moveScaleH   = null;
+let editSelectedIdx = -1;
+let editDragHandle  = null;
+let hoverHandle     = null;
+let cutoutMask        = null;
+let cutoutImageW      = 0;
+let cutoutImageH      = 0;
+let cutoutHasContent  = false;
+let cutoutMode        = 'auto-color';
+let cutoutBrushSize   = 40;
+let cutoutTolerance   = 30;
+let cutoutBrushDrawing= false;
+let cutoutBrushLastUV = null;
+let cutoutLassoPts    = null;
+let cutoutMlBusy      = false;
+let _bgRemovalPromise = null;
 const SHAPE_ICONS = {
   ellipse:'●', rect:'▭', roundrect:'▢', triangle:'▲', diamond:'◆',
   pentagon:'⬟', hexagon:'⬡', star:'★', arrow:'➤', heart:'♥'
@@ -1690,8 +1717,8 @@ function setTool(t) {
   const btn = document.getElementById('tool-' + t);
   if (btn) btn.classList.add('active');
   if (t !== 'shape')  closeShapePalette();
-  if (t !== 'cutout') cutoutPanel.classList.remove('open');
-  else                cutoutPanel.classList.add('open');
+  const panel = document.getElementById('cutout-panel');
+  if (panel) panel.classList.toggle('open', t === 'cutout');
 
   const isDraw = (t === 'shape' || t === 'polygon');
   overlayCanvas.style.cursor = (t === 'cutout') ? 'crosshair'
@@ -1843,18 +1870,7 @@ const cutoutDisplayCanvas = document.getElementById('cutout-display');
 const cutoutPanel  = document.getElementById('cutout-panel');
 const cutoutStatus = document.getElementById('cutout-status');
 
-let cutoutMask        = null;      // canvas at image natural size; alpha = keep-mask
-let cutoutImageW      = 0;
-let cutoutImageH      = 0;
-let cutoutHasContent  = false;     // true if any pixel has been removed
-let cutoutMode        = 'auto-color';  // auto-color | erase | restore | lasso-shape | object-select | ml-lasso
-let cutoutBrushSize   = 40;        // pixels in image-space
-let cutoutTolerance   = 30;        // 1..100 → 0..150 RGB distance
-let cutoutBrushDrawing= false;
-let cutoutBrushLastUV = null;
-let cutoutLassoPts    = null;      // [{u,v},...] during drag
-let cutoutMlBusy      = false;
-let _bgRemovalPromise = null;
+// Cutout state variables are declared above setTool().
 
 function showCutoutStatus(text) {
   if (!text) { cutoutStatus.style.display = 'none'; return; }
@@ -2208,7 +2224,7 @@ let _mlResultCache = null; // { imgHash: string, maskDataUrl: string }
 async function runMlCutout() {
   if (cutoutMlBusy || !loadedImage || !cutoutMask) return;
   cutoutMlBusy = true;
-  document.getElementById('cutout-ml-btn').disabled = true;
+  { const btn = document.getElementById('cutout-ml-btn'); if (btn) btn.disabled = true; }
   dlReset();
   showCutoutStatus('ML 모듈 로딩 중…');
   try {
@@ -2266,7 +2282,7 @@ async function runMlCutout() {
   } finally {
     cutoutMlBusy = false;
     dlFinish();
-    document.getElementById('cutout-ml-btn').disabled = false;
+    { const btn = document.getElementById('cutout-ml-btn'); if (btn) btn.disabled = false; }
   }
 }
 
@@ -2499,7 +2515,7 @@ function bakeCutoutToRegions() {
 async function runMlLassoSegment(lassoUVs) {
   if (cutoutMlBusy || !loadedImage || !cutoutMask || !lassoUVs || lassoUVs.length < 3) return;
   cutoutMlBusy = true;
-  document.getElementById('cutout-ml-btn').disabled = true;
+  { const btn = document.getElementById('cutout-ml-btn'); if (btn) btn.disabled = true; }
   dlReset();
   showCutoutStatus('ML 올가미 처리 중…');
   try {
@@ -2592,7 +2608,7 @@ async function runMlLassoSegment(lassoUVs) {
   } finally {
     cutoutMlBusy = false;
     dlFinish();
-    document.getElementById('cutout-ml-btn').disabled = false;
+    { const btn = document.getElementById('cutout-ml-btn'); if (btn) btn.disabled = false; }
   }
 }
 
@@ -2604,8 +2620,10 @@ function setCutoutMode(m) {
   // toggle which row is shown — auto: tolerance, brush/restore: brush, lasso: neither
   const isAuto  = (m === 'auto-color');
   const isBrush = (m === 'erase' || m === 'restore');
-  document.getElementById('cutout-row-tol').style.display   = isAuto  ? '' : 'none';
-  document.getElementById('cutout-row-brush').style.display = isBrush ? '' : 'none';
+  const tolRow = document.getElementById('cutout-row-tol');
+  const brushRow = document.getElementById('cutout-row-brush');
+  if (tolRow) tolRow.style.display = isAuto ? '' : 'none';
+  if (brushRow) brushRow.style.display = isBrush ? '' : 'none';
   redrawEditorOverlay();
 }
 document.querySelectorAll('#cutout-panel .cutout-mode-btn').forEach(btn => {
@@ -2633,23 +2651,7 @@ onId('cutout-invert', 'click', () => {
   invertCutoutMask();
 });
 
-// ── Draw-tool state ──────────────────────────────
-let drawing = false, drawStart = null, drawCurrent = null;
-
-// polygon draft: { points:[{u,v},...], hoverUV:{u,v} }
-let polygonDraft = null;
-
-// ── Move-tool state ──────────────────────────────
-let moveSelectedIdx = -1;   // persistent selection (bbox shown)
-let movingIdx    = -1;      // currently dragging translate
-let moveStartUV  = null;
-let moveOrigBase = null;    // snapshot to translate/scale from
-let moveScaleH   = null;    // active bbox handle while scaling: { kind:'bb-*', pivotU, pivotV, bbW, bbH }
-
-// ── Point-edit state ─────────────────────────────
-let editSelectedIdx = -1;        // region being edited
-let editDragHandle  = null;      // handle currently dragged
-let hoverHandle     = null;      // handle under cursor (for highlight/delete)
+// Tool interaction state variables are declared above setTool().
 
 // returns index of topmost region that contains UV (u,v), or -1
 function findRegionAt(u, v) {
