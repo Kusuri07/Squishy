@@ -1629,6 +1629,7 @@ function getVertexCompliance(u, v, regions) {
       restC = (r.restC === 0 || restC === 0) ? 0 : Math.max(restC, r.restC);
     }
   }
+  if (!inside && !affectOutsideRegions) return { edgeC: 0, restC: 0 };
   return { edgeC, restC };
 }
 
