@@ -2785,16 +2785,32 @@ function findHandleAt(reg, u, v, thresholdPx = 9) {
 }
 
 function getImageRect() {
-  // Read the ACTUAL rendered image rect from the browser layout.
-  // This is always correct regardless of aspect ratio or display scaling.
+  // Prefer the actual rendered image rect from browser layout.
   const wR = document.getElementById('editor-canvas-wrap').getBoundingClientRect();
   const iR = editorImg.getBoundingClientRect();
-  return {
-    ox: iR.left - wR.left,
-    oy: iR.top  - wR.top,
-    dW: iR.width,
-    dH: iR.height
-  };
+  let ox = iR.left - wR.left;
+  let oy = iR.top  - wR.top;
+  let dW = iR.width;
+  let dH = iR.height;
+
+  // Fallback for the brief moment after an image is selected but before layout has
+  // produced a non-zero <img> rect. This keeps the editor usable instead of
+  // turning every click into UV (0,0).
+  if ((!dW || !dH) && loadedImage && loadedImage.naturalWidth && loadedImage.naturalHeight && wR.width && wR.height) {
+    const imgAspect  = loadedImage.naturalWidth / loadedImage.naturalHeight;
+    const wrapAspect = wR.width / wR.height;
+    if (wrapAspect > imgAspect) {
+      dH = wR.height;
+      dW = dH * imgAspect;
+    } else {
+      dW = wR.width;
+      dH = dW / imgAspect;
+    }
+    ox = (wR.width  - dW) / 2;
+    oy = (wR.height - dH) / 2;
+  }
+
+  return { ox, oy, dW, dH };
 }
 
 function clamp01(x) {
@@ -2809,11 +2825,6 @@ function clientToImgUV(cx, cy, opts = {}) {
   const v = dH ? (cy - wR.top  - oy) / dH : 0;
   if (opts.clamp) return { u: clamp01(u), v: clamp01(v) };
   return { u, v };
-}
-
-function isUvInImage(uv) {
-  return Number.isFinite(uv.u) && Number.isFinite(uv.v)
-      && uv.u >= 0 && uv.u <= 1 && uv.v >= 0 && uv.v <= 1;
 }
 
 // ─── Region creation helpers ────────────────────────────────────────
@@ -3010,9 +3021,11 @@ function finalisePolygonDraft() {
 // ─── Pointer event dispatch ─────────────────────────────────────────
 overlayCanvas.addEventListener('pointerdown', e => {
   overlayCanvas.setPointerCapture(e.pointerId);
-  const rawUV = clientToImgUV(e.clientX, e.clientY);
-  if (!isUvInImage(rawUV)) return;
-  const uv = { u: clamp01(rawUV.u), v: clamp01(rawUV.v) };
+  // Be permissive here: browser zoom, sub-pixel layout, or an image that has just
+  // finished loading can produce UVs a hair outside 0..1 even when the pointer is
+  // visually over the image. Clamping keeps shape creation responsive instead of
+  // silently dropping the gesture.
+  const uv = clientToImgUV(e.clientX, e.clientY, { clamp: true });
 
   // ── Cutout tool ────────────────────────────────────────────────
   if (currentTool === 'cutout') {
