@@ -280,7 +280,7 @@
     /* per-region sliders */
     .region-sliders { display: flex; flex-direction: column; gap: 4px; }
     .rslider-row {
-      display: grid; grid-template-columns: 36px 1fr 34px;
+      display: grid; grid-template-columns: 36px 1fr 64px;
       align-items: center; gap: 6px;
     }
     .rslider-label { font-size: 0.7rem; color: #6b7280; }
@@ -362,7 +362,7 @@
     .hud-slider-wrap input[type=range] {
       width: 110px; padding: 0; accent-color: #6366f1;
     }
-    .hud-slider-val { min-width: 34px; color: #9ca3af; text-align: right; }
+    .hud-slider-val { min-width: 64px; color: #9ca3af; text-align: right; }
     #fps-counter {
       font-size: 0.72rem; color: #4b5563;
       padding: 4px 8px; background: rgba(17,24,39,.6);
@@ -396,6 +396,26 @@
       padding: 2px 4px; border-radius: 4px;
     }
     #btn-close-params:hover { color: #e5e7eb; background: rgba(255,255,255,.08); }
+    #sim-outside-options {
+      padding: 10px 12px;
+      border-bottom: 1px solid #374151;
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    #btn-affect-outside {
+      width: 100%; padding: 8px 10px;
+      background: #111827; color: #d1d5db;
+      border: 1px solid #374151; border-radius: 8px;
+      cursor: pointer; font-size: .78rem; font-weight: 600;
+      transition: background .15s, border-color .15s, color .15s;
+    }
+    #btn-affect-outside:hover { border-color: #6366f1; color: #fff; }
+    #btn-affect-outside.active {
+      background: rgba(99,102,241,.22);
+      border-color: #6366f1; color: #fff;
+    }
+    #sim-outside-options .hint {
+      font-size: .68rem; color: #6b7280; line-height: 1.35;
+    }
     #sim-params-list { padding: 8px; }
 
     /* ── View-only mode (공개 감상용) ────────────────────── */
@@ -582,6 +602,10 @@
     <span>파라미터 조절</span>
     <button id="btn-close-params" title="닫기">✕</button>
   </div>
+  <div id="sim-outside-options">
+    <button id="btn-affect-outside" type="button" title="도형 밖 배경도 같이 잡히고 늘어나게 합니다">바깥 영향: 꺼짐</button>
+    <div class="hint">꺼짐: 도형 안쪽만 변형 · 켜짐: 도형 밖 그림도 함께 영향</div>
+  </div>
   <div id="sim-params-list"></div>
 </div>
 
@@ -601,8 +625,8 @@
   <div class="hud-row">
     <div class="hud-slider-wrap">
       <span>드래그 범위</span>
-      <input type="range" id="drag-limit-slider" min="5" max="100" value="40" step="5" />
-      <span class="hud-slider-val" id="drag-limit-val">40%</span>
+      <input type="range" id="drag-limit-slider" min="0" max="100" value="40" step="1" />
+      <span class="hud-slider-val" id="drag-limit-val">40 → 4.0%</span>
     </div>
   </div>
   <div id="fps-counter">FPS: --</div>
@@ -828,6 +852,22 @@ class SoftBody2D {
     this._applyCompliance(regions);
   }
 
+  resetOutsideRegionsToRest(regions) {
+    for (let i = 0; i < this.nV; i++) {
+      const u = this.imgUV[i*2], v = this.imgUV[i*2+1];
+      if (isInsideAnyRegion(u, v, regions)) continue;
+      const b = i * 3;
+      this.pos[b] = this.rest[b];
+      this.pos[b+1] = this.rest[b+1];
+      this.pos[b+2] = this.rest[b+2];
+      this.prevPos[b] = this.rest[b];
+      this.prevPos[b+1] = this.rest[b+1];
+      this.prevPos[b+2] = this.rest[b+2];
+      this.vel[b] = 0; this.vel[b+1] = 0; this.vel[b+2] = 0;
+    }
+    this.geo.attributes.position.needsUpdate = true;
+  }
+
   _computeRestLengths() {
     const n = this.edgeIds.length >> 1;
     const L = new Float32Array(n);
@@ -960,9 +1000,9 @@ class Grabber2D {
     this.worldW     = worldW;
     this.worldH     = worldH;
     // Grab radius: 15% of shorter world dim → thick skin blob
-    // Max drag   : 40% of shorter world dim → realistic pull limit
+    // Max drag   : default UI 40 maps to 4.0% of shorter world dim
     this.grabRadius = Math.min(worldW, worldH) * 0.15;
-    this.maxDrag    = Math.min(worldW, worldH) * 0.40;
+    this.maxDrag    = Math.min(worldW, worldH) * dragLimitUiToFraction(DRAG_LIMIT_UI_DEFAULT);
     this.active     = null;
     this._tmp = new THREE.Vector3();
 
@@ -993,7 +1033,7 @@ class Grabber2D {
     const v = 0.5 - y / this.worldH;
     const regIdx = findRegionAt(u, v);
     const perGrabMaxDrag = regIdx >= 0 && this.minDim
-      ? this.minDim * ((appRegions[regIdx].maxDragPct ?? 40) / 100)
+      ? this.minDim * dragLimitUiToFraction(appRegions[regIdx].maxDragPct ?? DRAG_LIMIT_UI_DEFAULT)
       : this.maxDrag;
     for (const b of this.bodies) {
       if (b.startGrab(x, y, this.grabRadius, perGrabMaxDrag)) {
@@ -1570,15 +1610,23 @@ function removePolygonVertex(reg, idx) {
   return true;
 }
 
+function isInsideAnyRegion(u, v, regions) {
+  return regions.some(r => regionContains(r, u, v));
+}
+
 function getVertexCompliance(u, v, regions) {
-  let edgeC = BG_EDGE_C, restC = BG_REST_C;
+  let inside = false;
+  let edgeC = affectOutsideRegions ? BG_EDGE_C : 0;
+  let restC = affectOutsideRegions ? BG_REST_C : 0;
   for (const r of regions) {
     if (regionContains(r, u, v)) {
+      inside = true;
       // 0(rigid)은 절대 우선 적용; 아니면 더 탄성적인(큰) 값 채택
       edgeC = (r.edgeC === 0 || edgeC === 0) ? 0 : Math.max(edgeC, r.edgeC);
       restC = (r.restC === 0 || restC === 0) ? 0 : Math.max(restC, r.restC);
     }
   }
+  if (!inside && !affectOutsideRegions) return { edgeC: 0, restC: 0 };
   return { edgeC, restC };
 }
 
@@ -1597,6 +1645,7 @@ let loadedImage = null;  // HTMLImageElement
 let loadedImageUrl = null; // blob URL or data URL (kept alive for editorImg)
 let loadedImageDataUrl = null; // data URL snapshot for project export
 let loadedImageName = null;    // original file basename, for export filename
+let affectOutsideRegions = false; // default: shape regions isolate deformation
 
 // FPS tracking
 let frameCount = 0, lastFpsTime = performance.now();
@@ -2861,7 +2910,7 @@ function buildBaseRegionProps() {
     if (m) maxN = Math.max(maxN, parseInt(m[1]));
   }
   const label = `${baseLabel} ${maxN + 1}`;
-  return { edgeC, restC, maxDragPct: 40, color: preset.color, label };
+  return { edgeC, restC, maxDragPct: DRAG_LIMIT_UI_DEFAULT, color: preset.color, label };
 }
 
 // ─── Undo / Redo ────────────────────────────────────────────────────
@@ -3701,6 +3750,22 @@ function sliderToEdgeC(s) { return s === 0 ? 0 : Math.pow(10, _EL + (s / 100) * 
 function restCToSlider(v) { if (v === 0) return 0; return Math.max(1, Math.round(((Math.log10(Math.max(v,1e-6)) - _RL) / (_RH - _RL)) * 100)); }
 function sliderToRestC(s) { return s === 0 ? 0 : Math.pow(10, _RL + (s / 100) * (_RH - _RL)); }
 
+// Drag-limit UI is intentionally more restrictive than before.
+// Slider 0..100 maps to actual 0.0%..10.0% of the image's smaller dimension.
+// This makes each slider step equal 0.1% actual drag distance.
+const DRAG_LIMIT_UI_DEFAULT = 40;
+function clampDragLimitUi(v) {
+  const n = Number.isFinite(Number(v)) ? Number(v) : DRAG_LIMIT_UI_DEFAULT;
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+function dragLimitUiToFraction(v) {
+  return clampDragLimitUi(v) / 1000;
+}
+function formatDragLimitUi(v) {
+  const ui = clampDragLimitUi(v);
+  return `${ui} → ${(ui / 10).toFixed(1)}%`;
+}
+
 // Inline rename: dblclick a region label to edit it.
 function attachLabelEditor(spanEl, idx, rerender) {
   spanEl.classList.add('region-label');
@@ -3749,7 +3814,7 @@ function renderRegionsList() {
   appRegions.forEach((reg, idx) => {
     const eVal = edgeCToSlider(reg.edgeC);
     const rVal = restCToSlider(reg.restC);
-    const dVal = reg.maxDragPct ?? 40;
+    const dVal = clampDragLimitUi(reg.maxDragPct ?? DRAG_LIMIT_UI_DEFAULT);
 
     const div = document.createElement('div');
     div.className = 'region-item';
@@ -3778,8 +3843,8 @@ function renderRegionsList() {
         <div class="rslider-row">
           <span class="rslider-label">드래그</span>
           <input type="range" class="r-drag-s" data-idx="${idx}"
-                 min="5" max="100" value="${dVal}" step="5" />
-          <span class="rslider-val r-drag-v">${dVal}%</span>
+                 min="0" max="100" value="${dVal}" step="1" />
+          <span class="rslider-val r-drag-v">${formatDragLimitUi(dVal)}</span>
         </div>
       </div>`;
     regionsList.appendChild(div);
@@ -3837,8 +3902,8 @@ function renderRegionsList() {
     const dragValEl  = div.querySelector('.r-drag-v');
     dragSlider.addEventListener('input', () => {
       const s = parseInt(dragSlider.value);
-      dragValEl.textContent = s + '%';
-      appRegions[idx].maxDragPct = s;
+      dragValEl.textContent = formatDragLimitUi(s);
+      appRegions[idx].maxDragPct = clampDragLimitUi(s);
     });
   });
 }
@@ -3900,6 +3965,7 @@ function startSimulation(img) {
   // 파라미터 패널은 닫은 상태로 시작
   document.getElementById('sim-params-panel').style.display   = 'none';
   document.getElementById('btn-params').classList.remove('active');
+  updateAffectOutsideButton();
 
   const W = img.naturalWidth || img.width;
   const H = img.naturalHeight || img.height;
@@ -3944,7 +4010,7 @@ function startSimulation(img) {
   scene3.add(softbody.mesh);
 
   // Grabber — create once, then update properties on subsequent calls
-  const dragPct = parseInt(document.getElementById('drag-limit-slider').value) / 100;
+  const dragPct = dragLimitUiToFraction(document.getElementById('drag-limit-slider')?.value ?? DRAG_LIMIT_UI_DEFAULT);
   if (!grabber) {
     grabber = new Grabber2D(renderer3, camera3, [softbody], worldW, worldH);
   } else {
@@ -4045,6 +4111,25 @@ function loop(now) {
 // ═══════════════════════════════════════════════
 //  SIMULATION PARAMETER PANEL
 // ═══════════════════════════════════════════════
+function updateAffectOutsideButton() {
+  const btn = document.getElementById('btn-affect-outside');
+  if (!btn) return;
+  btn.classList.toggle('active', affectOutsideRegions);
+  btn.textContent = affectOutsideRegions ? '바깥 영향: 켜짐' : '바깥 영향: 꺼짐';
+  btn.title = affectOutsideRegions
+    ? '도형 밖 배경도 같이 잡히고 늘어납니다'
+    : '도형 밖 배경은 원래 위치에 고정됩니다';
+}
+
+function setAffectOutsideRegions(enabled) {
+  affectOutsideRegions = !!enabled;
+  updateAffectOutsideButton();
+  if (softbody) {
+    if (!affectOutsideRegions) softbody.resetOutsideRegionsToRest(appRegions);
+    softbody.refreshCompliance(appRegions);
+  }
+}
+
 function renderSimParamsList() {
   const container = document.getElementById('sim-params-list');
   container.innerHTML = '';
@@ -4056,7 +4141,7 @@ function renderSimParamsList() {
   appRegions.forEach((reg, idx) => {
     const eVal = edgeCToSlider(reg.edgeC);
     const rVal = restCToSlider(reg.restC);
-    const dVal = reg.maxDragPct ?? 40;
+    const dVal = clampDragLimitUi(reg.maxDragPct ?? DRAG_LIMIT_UI_DEFAULT);
     const div = document.createElement('div');
     div.className = 'region-item';
     div.dataset.idx = idx;
@@ -4080,8 +4165,8 @@ function renderSimParamsList() {
         </div>
         <div class="rslider-row">
           <span class="rslider-label">드래그</span>
-          <input type="range" class="r-drag-s" min="5" max="100" value="${dVal}" step="5" />
-          <span class="rslider-val r-drag-v">${dVal}%</span>
+          <input type="range" class="r-drag-s" min="0" max="100" value="${dVal}" step="1" />
+          <span class="rslider-val r-drag-v">${formatDragLimitUi(dVal)}</span>
         </div>
       </div>`;
     container.appendChild(div);
@@ -4113,8 +4198,8 @@ function renderSimParamsList() {
     const dragValEl  = div.querySelector('.r-drag-v');
     dragSlider.addEventListener('input', () => {
       const s = parseInt(dragSlider.value);
-      dragValEl.textContent = s + '%';
-      appRegions[idx].maxDragPct = s;
+      dragValEl.textContent = formatDragLimitUi(s);
+      appRegions[idx].maxDragPct = clampDragLimitUi(s);
     });
   });
 }
@@ -4128,6 +4213,7 @@ onId('btn-params', 'click', () => {
     btn.classList.remove('active');
   } else {
     renderSimParamsList();
+    updateAffectOutsideButton();
     panel.style.display = 'flex';
     btn.classList.add('active');
   }
@@ -4137,6 +4223,11 @@ onId('btn-close-params', 'click', () => {
   document.getElementById('sim-params-panel').style.display = 'none';
   document.getElementById('btn-params').classList.remove('active');
 });
+
+onId('btn-affect-outside', 'click', () => {
+  setAffectOutsideRegions(!affectOutsideRegions);
+});
+updateAffectOutsideButton();
 
 onId('btn-edit-regions', 'click', () => {
   document.getElementById('canvas-container').style.display   = 'none';
@@ -4186,10 +4277,11 @@ const dragLimitSlider = document.getElementById('drag-limit-slider');
 const dragLimitVal    = document.getElementById('drag-limit-val');
 if (dragLimitSlider) {
   dragLimitSlider.addEventListener('input', () => {
-    const pct = parseInt(dragLimitSlider.value);
-    if (dragLimitVal) dragLimitVal.textContent = pct + '%';
+    const pct = clampDragLimitUi(dragLimitSlider.value);
+    dragLimitSlider.value = pct;
+    if (dragLimitVal) dragLimitVal.textContent = formatDragLimitUi(pct);
     if (grabber && grabber.minDim) {
-      grabber.maxDrag = grabber.minDim * (pct / 100);
+      grabber.maxDrag = grabber.minDim * dragLimitUiToFraction(pct);
     }
   });
 } else {
@@ -4217,6 +4309,7 @@ onId('btn-reset-editor', 'click', () => {
   _revokeIfBlobUrl(loadedImageUrl);
   loadedImageUrl = null; loadedImageDataUrl = null; loadedImageName = null;
   cutoutMask = null; cutoutHasContent = false;
+  setAffectOutsideRegions(false);
   hideCutoutDisplay();
   undoStack.length = 0; redoStack.length = 0;
   renderRegionsList();
@@ -4260,7 +4353,8 @@ function buildCurrentProject() {
     settings: {
       part:        partSelect.value,
       customVal:   parseInt(customSlider.value, 10) || 50,
-      dragPct:     parseInt(document.getElementById('drag-limit-slider')?.value, 10) || 40,
+      dragPct:     clampDragLimitUi(document.getElementById('drag-limit-slider')?.value ?? DRAG_LIMIT_UI_DEFAULT),
+      affectOutside: affectOutsideRegions,
       numSubsteps
     }
   };
@@ -4337,9 +4431,12 @@ function applyProject(project) {
     const dragSlider = document.getElementById('drag-limit-slider');
     const dragValEl  = document.getElementById('drag-limit-val');
     if (dragSlider && typeof s.dragPct === 'number') {
-      dragSlider.value = s.dragPct;
-      if (dragValEl) dragValEl.textContent = s.dragPct + '%';
+      const dragUi = clampDragLimitUi(s.dragPct);
+      dragSlider.value = dragUi;
+      if (dragValEl) dragValEl.textContent = formatDragLimitUi(dragUi);
     }
+    if (typeof s.affectOutside === 'boolean') setAffectOutsideRegions(s.affectOutside);
+    else setAffectOutsideRegions(false);
     if (typeof s.numSubsteps === 'number') numSubsteps = s.numSubsteps;
 
     showEditor(img);
