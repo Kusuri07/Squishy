@@ -134,6 +134,7 @@
       background:rgba(15,23,42,.96); border:1px solid #374151;
       border-radius:10px; padding:10px 14px; font-size:.78rem; color:#e5e7eb;
       z-index:30; display:none; min-width:280px;
+      white-space: pre-line;
       box-shadow: 0 8px 24px rgba(0,0,0,.35);
     }
     #cutout-status .cs-title { font-weight:600; margin-bottom:6px; }
@@ -279,7 +280,7 @@
     /* per-region sliders */
     .region-sliders { display: flex; flex-direction: column; gap: 4px; }
     .rslider-row {
-      display: grid; grid-template-columns: 36px 1fr 34px;
+      display: grid; grid-template-columns: 36px 1fr 64px;
       align-items: center; gap: 6px;
     }
     .rslider-label { font-size: 0.7rem; color: #6b7280; }
@@ -361,7 +362,7 @@
     .hud-slider-wrap input[type=range] {
       width: 110px; padding: 0; accent-color: #6366f1;
     }
-    .hud-slider-val { min-width: 34px; color: #9ca3af; text-align: right; }
+    .hud-slider-val { min-width: 64px; color: #9ca3af; text-align: right; }
     #fps-counter {
       font-size: 0.72rem; color: #4b5563;
       padding: 4px 8px; background: rgba(17,24,39,.6);
@@ -395,6 +396,26 @@
       padding: 2px 4px; border-radius: 4px;
     }
     #btn-close-params:hover { color: #e5e7eb; background: rgba(255,255,255,.08); }
+    #sim-outside-options {
+      padding: 10px 12px;
+      border-bottom: 1px solid #374151;
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    #btn-affect-outside {
+      width: 100%; padding: 8px 10px;
+      background: #111827; color: #d1d5db;
+      border: 1px solid #374151; border-radius: 8px;
+      cursor: pointer; font-size: .78rem; font-weight: 600;
+      transition: background .15s, border-color .15s, color .15s;
+    }
+    #btn-affect-outside:hover { border-color: #6366f1; color: #fff; }
+    #btn-affect-outside.active {
+      background: rgba(99,102,241,.22);
+      border-color: #6366f1; color: #fff;
+    }
+    #sim-outside-options .hint {
+      font-size: .68rem; color: #6b7280; line-height: 1.35;
+    }
     #sim-params-list { padding: 8px; }
 
     /* ── View-only mode (공개 감상용) ────────────────────── */
@@ -581,6 +602,10 @@
     <span>파라미터 조절</span>
     <button id="btn-close-params" title="닫기">✕</button>
   </div>
+  <div id="sim-outside-options">
+    <button id="btn-affect-outside" type="button" title="도형 밖 배경도 같이 잡히고 늘어나게 합니다">바깥 영향: 꺼짐</button>
+    <div class="hint">꺼짐: 도형 안쪽만 변형 · 켜짐: 도형 밖 그림도 함께 영향</div>
+  </div>
   <div id="sim-params-list"></div>
 </div>
 
@@ -600,8 +625,8 @@
   <div class="hud-row">
     <div class="hud-slider-wrap">
       <span>드래그 범위</span>
-      <input type="range" id="drag-limit-slider" min="5" max="100" value="40" step="5" />
-      <span class="hud-slider-val" id="drag-limit-val">40%</span>
+      <input type="range" id="drag-limit-slider" min="0" max="100" value="40" step="1" />
+      <span class="hud-slider-val" id="drag-limit-val">40 → 4.0%</span>
     </div>
   </div>
   <div id="fps-counter">FPS: --</div>
@@ -827,6 +852,22 @@ class SoftBody2D {
     this._applyCompliance(regions);
   }
 
+  resetOutsideRegionsToRest(regions) {
+    for (let i = 0; i < this.nV; i++) {
+      const u = this.imgUV[i*2], v = this.imgUV[i*2+1];
+      if (isInsideAnyRegion(u, v, regions)) continue;
+      const b = i * 3;
+      this.pos[b] = this.rest[b];
+      this.pos[b+1] = this.rest[b+1];
+      this.pos[b+2] = this.rest[b+2];
+      this.prevPos[b] = this.rest[b];
+      this.prevPos[b+1] = this.rest[b+1];
+      this.prevPos[b+2] = this.rest[b+2];
+      this.vel[b] = 0; this.vel[b+1] = 0; this.vel[b+2] = 0;
+    }
+    this.geo.attributes.position.needsUpdate = true;
+  }
+
   _computeRestLengths() {
     const n = this.edgeIds.length >> 1;
     const L = new Float32Array(n);
@@ -959,9 +1000,9 @@ class Grabber2D {
     this.worldW     = worldW;
     this.worldH     = worldH;
     // Grab radius: 15% of shorter world dim → thick skin blob
-    // Max drag   : 40% of shorter world dim → realistic pull limit
+    // Max drag   : default UI 40 maps to 4.0% of shorter world dim
     this.grabRadius = Math.min(worldW, worldH) * 0.15;
-    this.maxDrag    = Math.min(worldW, worldH) * 0.40;
+    this.maxDrag    = Math.min(worldW, worldH) * dragLimitUiToFraction(DRAG_LIMIT_UI_DEFAULT);
     this.active     = null;
     this._tmp = new THREE.Vector3();
 
@@ -992,7 +1033,7 @@ class Grabber2D {
     const v = 0.5 - y / this.worldH;
     const regIdx = findRegionAt(u, v);
     const perGrabMaxDrag = regIdx >= 0 && this.minDim
-      ? this.minDim * ((appRegions[regIdx].maxDragPct ?? 40) / 100)
+      ? this.minDim * dragLimitUiToFraction(appRegions[regIdx].maxDragPct ?? DRAG_LIMIT_UI_DEFAULT)
       : this.maxDrag;
     for (const b of this.bodies) {
       if (b.startGrab(x, y, this.grabRadius, perGrabMaxDrag)) {
@@ -1569,15 +1610,23 @@ function removePolygonVertex(reg, idx) {
   return true;
 }
 
+function isInsideAnyRegion(u, v, regions) {
+  return regions.some(r => regionContains(r, u, v));
+}
+
 function getVertexCompliance(u, v, regions) {
-  let edgeC = BG_EDGE_C, restC = BG_REST_C;
+  let inside = false;
+  let edgeC = affectOutsideRegions ? BG_EDGE_C : 0;
+  let restC = affectOutsideRegions ? BG_REST_C : 0;
   for (const r of regions) {
     if (regionContains(r, u, v)) {
+      inside = true;
       // 0(rigid)은 절대 우선 적용; 아니면 더 탄성적인(큰) 값 채택
       edgeC = (r.edgeC === 0 || edgeC === 0) ? 0 : Math.max(edgeC, r.edgeC);
       restC = (r.restC === 0 || restC === 0) ? 0 : Math.max(restC, r.restC);
     }
   }
+  if (!inside && !affectOutsideRegions) return { edgeC: 0, restC: 0 };
   return { edgeC, restC };
 }
 
@@ -1596,9 +1645,23 @@ let loadedImage = null;  // HTMLImageElement
 let loadedImageUrl = null; // blob URL or data URL (kept alive for editorImg)
 let loadedImageDataUrl = null; // data URL snapshot for project export
 let loadedImageName = null;    // original file basename, for export filename
+let affectOutsideRegions = false; // default: shape regions isolate deformation
 
 // FPS tracking
 let frameCount = 0, lastFpsTime = performance.now();
+
+// Safe DOM event binding for optional UI controls. A stale/conflict-resolved
+// index.html can otherwise stop the whole editor with "null.addEventListener".
+function onId(id, type, handler, options) {
+  const el = document.getElementById(id);
+  if (!el) {
+    console.warn(`[elastic-2d] Missing #${id}; skipped ${type} listener`);
+    return null;
+  }
+  el.addEventListener(type, handler, options);
+  return el;
+}
+
 
 // ═══════════════════════════════════════════════
 //  UPLOAD SCREEN
@@ -1621,7 +1684,7 @@ dropZone.addEventListener('drop', e => {
 });
 
 // Upload-screen secondary action: open .json picker
-document.getElementById('upload-secondary').addEventListener('click', pickProjectFile);
+onId('upload-secondary', 'click', pickProjectFile);
 
 function _revokeIfBlobUrl(url) {
   if (url && typeof url === 'string' && url.startsWith('blob:')) URL.revokeObjectURL(url);
@@ -1665,6 +1728,33 @@ customSlider.addEventListener('input', () => {
 // 'shape' (draw preset via bbox drag) | 'polygon' | 'move' | 'edit'
 let currentTool  = 'shape';
 let currentPreset = 'ellipse';
+
+// These interaction states are used by setTool(), which can be triggered as
+// soon as toolbar listeners are attached. Keep them above setTool() to avoid
+// temporal-dead-zone ReferenceErrors if a stale/partially-initialized page lets
+// the user click before the rest of the script has run.
+let drawing = false, drawStart = null, drawCurrent = null;
+let polygonDraft = null;
+let moveSelectedIdx = -1;
+let movingIdx    = -1;
+let moveStartUV  = null;
+let moveOrigBase = null;
+let moveScaleH   = null;
+let editSelectedIdx = -1;
+let editDragHandle  = null;
+let hoverHandle     = null;
+let cutoutMask        = null;
+let cutoutImageW      = 0;
+let cutoutImageH      = 0;
+let cutoutHasContent  = false;
+let cutoutMode        = 'auto-color';
+let cutoutBrushSize   = 40;
+let cutoutTolerance   = 30;
+let cutoutBrushDrawing= false;
+let cutoutBrushLastUV = null;
+let cutoutLassoPts    = null;
+let cutoutMlBusy      = false;
+let _bgRemovalPromise = null;
 const SHAPE_ICONS = {
   ellipse:'●', rect:'▭', roundrect:'▢', triangle:'▲', diamond:'◆',
   pentagon:'⬟', hexagon:'⬡', star:'★', arrow:'➤', heart:'♥'
@@ -1676,8 +1766,8 @@ function setTool(t) {
   const btn = document.getElementById('tool-' + t);
   if (btn) btn.classList.add('active');
   if (t !== 'shape')  closeShapePalette();
-  if (t !== 'cutout') cutoutPanel.classList.remove('open');
-  else                cutoutPanel.classList.add('open');
+  const panel = document.getElementById('cutout-panel');
+  if (panel) panel.classList.toggle('open', t === 'cutout');
 
   const isDraw = (t === 'shape' || t === 'polygon');
   overlayCanvas.style.cursor = (t === 'cutout') ? 'crosshair'
@@ -1709,7 +1799,7 @@ function setPreset(p) {
   document.getElementById('tool-shape-icon').textContent = SHAPE_ICONS[p] || '●';
 }
 
-document.getElementById('tool-shape').addEventListener('click', () => {
+onId('tool-shape', 'click', () => {
   if (currentTool === 'shape') toggleShapePalette();
   else { setTool('shape'); openShapePalette(); }
 });
@@ -1720,10 +1810,10 @@ document.querySelectorAll('.shape-cell').forEach(cell => {
     closeShapePalette();
   });
 });
-document.getElementById('tool-polygon').addEventListener('click', () => setTool('polygon'));
-document.getElementById('tool-move'   ).addEventListener('click', () => setTool('move'));
-document.getElementById('tool-edit'   ).addEventListener('click', () => setTool('edit'));
-document.getElementById('tool-cutout' ).addEventListener('click', () => setTool('cutout'));
+onId('tool-polygon', 'click', () => setTool('polygon'));
+onId('tool-move', 'click', () => setTool('move'));
+onId('tool-edit', 'click', () => setTool('edit'));
+onId('tool-cutout', 'click', () => setTool('cutout'));
 
 // click elsewhere closes palette
 document.addEventListener('click', e => {
@@ -1829,18 +1919,7 @@ const cutoutDisplayCanvas = document.getElementById('cutout-display');
 const cutoutPanel  = document.getElementById('cutout-panel');
 const cutoutStatus = document.getElementById('cutout-status');
 
-let cutoutMask        = null;      // canvas at image natural size; alpha = keep-mask
-let cutoutImageW      = 0;
-let cutoutImageH      = 0;
-let cutoutHasContent  = false;     // true if any pixel has been removed
-let cutoutMode        = 'auto-color';  // auto-color | erase | restore | lasso-shape | object-select | ml-lasso
-let cutoutBrushSize   = 40;        // pixels in image-space
-let cutoutTolerance   = 30;        // 1..100 → 0..150 RGB distance
-let cutoutBrushDrawing= false;
-let cutoutBrushLastUV = null;
-let cutoutLassoPts    = null;      // [{u,v},...] during drag
-let cutoutMlBusy      = false;
-let _bgRemovalPromise = null;
+// Cutout state variables are declared above setTool().
 
 function showCutoutStatus(text) {
   if (!text) { cutoutStatus.style.display = 'none'; return; }
@@ -2136,11 +2215,41 @@ function loadCutoutFromDataUrl(url, cb) {
 }
 
 // ── ML auto-cutout via @imgly/background-removal (lazy CDN load) ────
+const IMGLY_BG_REMOVAL_VERSION = '1.5.5';
+const IMGLY_BG_REMOVAL_MODULE_URL =
+  `https://cdn.jsdelivr.net/npm/@imgly/background-removal@${IMGLY_BG_REMOVAL_VERSION}/+esm`;
+const IMGLY_BG_REMOVAL_ASSET_PATH =
+  `https://staticimgly.com/@imgly/background-removal-data/${IMGLY_BG_REMOVAL_VERSION}/dist/`;
+
 function loadBgRemoval() {
   if (_bgRemovalPromise) return _bgRemovalPromise;
-  _bgRemovalPromise = import('https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.5.5/+esm')
+  _bgRemovalPromise = import(IMGLY_BG_REMOVAL_MODULE_URL)
     .catch(err => { _bgRemovalPromise = null; throw err; });
   return _bgRemovalPromise;
+}
+
+function buildBgRemovalConfig() {
+  return {
+    // Use an absolute HTTPS asset path. Without this, file:// launches and some
+    // lightweight static servers can make the library look for ONNX/WASM assets
+    // in the wrong place, which surfaces as "no available backend found".
+    publicPath: IMGLY_BG_REMOVAL_ASSET_PATH,
+    // CPU/WASM is the most predictable backend across ordinary Chrome installs.
+    device: 'cpu',
+    // Avoid worker URL edge cases when the app is opened from file:// or a very
+    // simple local static server. The model still runs locally in the browser.
+    proxyToWorker: false,
+    progress: (key, current, total) => dlReportProgress(key, current, total),
+    output: { format: 'image/png' }
+  };
+}
+
+function formatMlError(err) {
+  const msg = err && err.message ? err.message : String(err);
+  if (/Failed to fetch|no available backend|publicPath|Load failed|Importing a module script failed/i.test(msg)) {
+    return msg + '\n\n확인할 것: http://127.0.0.1:8000/index.html처럼 서버 주소로 열고, jsDelivr/staticimgly CDN 접속이 차단되어 있지 않은지 확인하세요.';
+  }
+  return msg;
 }
 
 async function imageToBlob(img) {
@@ -2164,7 +2273,7 @@ let _mlResultCache = null; // { imgHash: string, maskDataUrl: string }
 async function runMlCutout() {
   if (cutoutMlBusy || !loadedImage || !cutoutMask) return;
   cutoutMlBusy = true;
-  document.getElementById('cutout-ml-btn').disabled = true;
+  { const btn = document.getElementById('cutout-ml-btn'); if (btn) btn.disabled = true; }
   dlReset();
   showCutoutStatus('ML 모듈 로딩 중…');
   try {
@@ -2183,11 +2292,7 @@ async function runMlCutout() {
     const mod = await loadBgRemoval();
     const removeBg = mod.removeBackground || mod.default?.removeBackground || mod.default;
     if (typeof removeBg !== 'function') throw new Error('removeBackground export not found');
-    const cfg = {
-      progress: (key, current, total) => dlReportProgress(key, current, total),
-      output: { format: 'image/png' }
-    };
-    const fgBlob = await removeBg(blob, cfg);
+    const fgBlob = await removeBg(blob, buildBgRemovalConfig());
     const fgImg  = await new Promise((res, rej) => {
       const im = new Image();
       im.onload = () => res(im);
@@ -2221,12 +2326,12 @@ async function runMlCutout() {
     setTimeout(() => showCutoutStatus(''), 1200);
   } catch (err) {
     console.error('[cutout-ml]', err);
-    showCutoutStatus('ML 누끼 실패: ' + (err.message || err));
+    showCutoutStatus('ML 누끼 실패: ' + formatMlError(err));
     setTimeout(() => showCutoutStatus(''), 3000);
   } finally {
     cutoutMlBusy = false;
     dlFinish();
-    document.getElementById('cutout-ml-btn').disabled = false;
+    { const btn = document.getElementById('cutout-ml-btn'); if (btn) btn.disabled = false; }
   }
 }
 
@@ -2459,7 +2564,7 @@ function bakeCutoutToRegions() {
 async function runMlLassoSegment(lassoUVs) {
   if (cutoutMlBusy || !loadedImage || !cutoutMask || !lassoUVs || lassoUVs.length < 3) return;
   cutoutMlBusy = true;
-  document.getElementById('cutout-ml-btn').disabled = true;
+  { const btn = document.getElementById('cutout-ml-btn'); if (btn) btn.disabled = true; }
   dlReset();
   showCutoutStatus('ML 올가미 처리 중…');
   try {
@@ -2489,11 +2594,7 @@ async function runMlLassoSegment(lassoUVs) {
     const mod = await loadBgRemoval();
     const removeBg = mod.removeBackground || mod.default?.removeBackground || mod.default;
     if (typeof removeBg !== 'function') throw new Error('removeBackground export not found');
-    const cfg = {
-      progress: (key, current, total) => dlReportProgress(key, current, total),
-      output: { format: 'image/png' }
-    };
-    const fgBlob = await removeBg(cropBlob, cfg);
+    const fgBlob = await removeBg(cropBlob, buildBgRemovalConfig());
     const fgImg  = await new Promise((res, rej) => {
       const im = new Image();
       im.onload = () => res(im); im.onerror = rej;
@@ -2551,12 +2652,12 @@ async function runMlLassoSegment(lassoUVs) {
     setTimeout(() => showCutoutStatus(''), 1500);
   } catch (err) {
     console.error('[cutout-ml-lasso]', err);
-    showCutoutStatus('ML 올가미 실패: ' + (err.message || err));
+    showCutoutStatus('ML 올가미 실패: ' + formatMlError(err));
     setTimeout(() => showCutoutStatus(''), 3000);
   } finally {
     cutoutMlBusy = false;
     dlFinish();
-    document.getElementById('cutout-ml-btn').disabled = false;
+    { const btn = document.getElementById('cutout-ml-btn'); if (btn) btn.disabled = false; }
   }
 }
 
@@ -2568,52 +2669,38 @@ function setCutoutMode(m) {
   // toggle which row is shown — auto: tolerance, brush/restore: brush, lasso: neither
   const isAuto  = (m === 'auto-color');
   const isBrush = (m === 'erase' || m === 'restore');
-  document.getElementById('cutout-row-tol').style.display   = isAuto  ? '' : 'none';
-  document.getElementById('cutout-row-brush').style.display = isBrush ? '' : 'none';
+  const tolRow = document.getElementById('cutout-row-tol');
+  const brushRow = document.getElementById('cutout-row-brush');
+  if (tolRow) tolRow.style.display = isAuto ? '' : 'none';
+  if (brushRow) brushRow.style.display = isBrush ? '' : 'none';
   redrawEditorOverlay();
 }
 document.querySelectorAll('#cutout-panel .cutout-mode-btn').forEach(btn => {
   btn.addEventListener('click', () => setCutoutMode(btn.dataset.mode));
 });
-document.getElementById('cutout-tolerance').addEventListener('input', e => {
+onId('cutout-tolerance', 'input', e => {
   cutoutTolerance = parseInt(e.target.value);
   document.getElementById('cutout-tolerance-val').textContent = cutoutTolerance;
 });
-document.getElementById('cutout-brush').addEventListener('input', e => {
+onId('cutout-brush', 'input', e => {
   cutoutBrushSize = parseInt(e.target.value);
   document.getElementById('cutout-brush-val').textContent = cutoutBrushSize;
   redrawEditorOverlay();
 });
-document.getElementById('cutout-ml-btn').addEventListener('click', runMlCutout);
-document.getElementById('cutout-to-shape').addEventListener('click', bakeCutoutToRegions);
-document.getElementById('cutout-reset').addEventListener('click', () => {
+onId('cutout-ml-btn', 'click', runMlCutout);
+onId('cutout-to-shape', 'click', bakeCutoutToRegions);
+onId('cutout-reset', 'click', () => {
   if (!cutoutHasContent) return;
   pushHistory();
   clearCutoutMask();
 });
-document.getElementById('cutout-invert').addEventListener('click', () => {
+onId('cutout-invert', 'click', () => {
   if (!cutoutMask) return;
   pushHistory();
   invertCutoutMask();
 });
 
-// ── Draw-tool state ──────────────────────────────
-let drawing = false, drawStart = null, drawCurrent = null;
-
-// polygon draft: { points:[{u,v},...], hoverUV:{u,v} }
-let polygonDraft = null;
-
-// ── Move-tool state ──────────────────────────────
-let moveSelectedIdx = -1;   // persistent selection (bbox shown)
-let movingIdx    = -1;      // currently dragging translate
-let moveStartUV  = null;
-let moveOrigBase = null;    // snapshot to translate/scale from
-let moveScaleH   = null;    // active bbox handle while scaling: { kind:'bb-*', pivotU, pivotV, bbW, bbH }
-
-// ── Point-edit state ─────────────────────────────
-let editSelectedIdx = -1;        // region being edited
-let editDragHandle  = null;      // handle currently dragged
-let hoverHandle     = null;      // handle under cursor (for highlight/delete)
+// Tool interaction state variables are declared above setTool().
 
 // returns index of topmost region that contains UV (u,v), or -1
 function findRegionAt(u, v) {
@@ -2762,26 +2849,46 @@ function findHandleAt(reg, u, v, thresholdPx = 9) {
 }
 
 function getImageRect() {
-  // Read the ACTUAL rendered image rect from the browser layout.
-  // This is always correct regardless of aspect ratio or display scaling.
+  // Prefer the actual rendered image rect from browser layout.
   const wR = document.getElementById('editor-canvas-wrap').getBoundingClientRect();
   const iR = editorImg.getBoundingClientRect();
-  return {
-    ox: iR.left - wR.left,
-    oy: iR.top  - wR.top,
-    dW: iR.width,
-    dH: iR.height
-  };
+  let ox = iR.left - wR.left;
+  let oy = iR.top  - wR.top;
+  let dW = iR.width;
+  let dH = iR.height;
+
+  // Fallback for the brief moment after an image is selected but before layout has
+  // produced a non-zero <img> rect. This keeps the editor usable instead of
+  // turning every click into UV (0,0).
+  if ((!dW || !dH) && loadedImage && loadedImage.naturalWidth && loadedImage.naturalHeight && wR.width && wR.height) {
+    const imgAspect  = loadedImage.naturalWidth / loadedImage.naturalHeight;
+    const wrapAspect = wR.width / wR.height;
+    if (wrapAspect > imgAspect) {
+      dH = wR.height;
+      dW = dH * imgAspect;
+    } else {
+      dW = wR.width;
+      dH = dW / imgAspect;
+    }
+    ox = (wR.width  - dW) / 2;
+    oy = (wR.height - dH) / 2;
+  }
+
+  return { ox, oy, dW, dH };
 }
 
-function clientToImgUV(cx, cy) {
+function clamp01(x) {
+  return Math.max(0, Math.min(1, x));
+}
+
+function clientToImgUV(cx, cy, opts = {}) {
   const wrap = document.getElementById('editor-canvas-wrap');
   const wR   = wrap.getBoundingClientRect();
   const { ox, oy, dW, dH } = getImageRect();
-  return {
-    u: (cx - wR.left - ox) / dW,
-    v: (cy - wR.top  - oy) / dH
-  };
+  const u = dW ? (cx - wR.left - ox) / dW : 0;
+  const v = dH ? (cy - wR.top  - oy) / dH : 0;
+  if (opts.clamp) return { u: clamp01(u), v: clamp01(v) };
+  return { u, v };
 }
 
 // ─── Region creation helpers ────────────────────────────────────────
@@ -2803,7 +2910,7 @@ function buildBaseRegionProps() {
     if (m) maxN = Math.max(maxN, parseInt(m[1]));
   }
   const label = `${baseLabel} ${maxN + 1}`;
-  return { edgeC, restC, maxDragPct: 40, color: preset.color, label };
+  return { edgeC, restC, maxDragPct: DRAG_LIMIT_UI_DEFAULT, color: preset.color, label };
 }
 
 // ─── Undo / Redo ────────────────────────────────────────────────────
@@ -2978,7 +3085,11 @@ function finalisePolygonDraft() {
 // ─── Pointer event dispatch ─────────────────────────────────────────
 overlayCanvas.addEventListener('pointerdown', e => {
   overlayCanvas.setPointerCapture(e.pointerId);
-  const uv = clientToImgUV(e.clientX, e.clientY);
+  // Be permissive here: browser zoom, sub-pixel layout, or an image that has just
+  // finished loading can produce UVs a hair outside 0..1 even when the pointer is
+  // visually over the image. Clamping keeps shape creation responsive instead of
+  // silently dropping the gesture.
+  const uv = clientToImgUV(e.clientX, e.clientY, { clamp: true });
 
   // ── Cutout tool ────────────────────────────────────────────────
   if (currentTool === 'cutout') {
@@ -3107,7 +3218,7 @@ overlayCanvas.addEventListener('pointerdown', e => {
 });
 
 overlayCanvas.addEventListener('pointermove', e => {
-  const uv = clientToImgUV(e.clientX, e.clientY);
+  const uv = clientToImgUV(e.clientX, e.clientY, { clamp: true });
   // track cursor in canvas coords for cutout brush ring
   const r = overlayCanvas.getBoundingClientRect();
   overlayCanvas._lastMove = { x: e.clientX - r.left, y: e.clientY - r.top };
@@ -3290,11 +3401,25 @@ overlayCanvas.addEventListener('pointerup', () => {
     if (!drawing) return;
     drawing = false;
     if (drawStart && drawCurrent) {
-      const u0 = Math.min(drawStart.u, drawCurrent.u);
-      const v0 = Math.min(drawStart.v, drawCurrent.v);
-      const u1 = Math.max(drawStart.u, drawCurrent.u);
-      const v1 = Math.max(drawStart.v, drawCurrent.v);
-      if ((u1 - u0) > 0.01 && (v1 - v0) > 0.01) {
+      let u0 = Math.min(drawStart.u, drawCurrent.u);
+      let v0 = Math.min(drawStart.v, drawCurrent.v);
+      let u1 = Math.max(drawStart.u, drawCurrent.u);
+      let v1 = Math.max(drawStart.v, drawCurrent.v);
+      const draggedEnough = (u1 - u0) > 0.01 && (v1 - v0) > 0.01;
+      if (!draggedEnough) {
+        // A plain click now creates a small default shape. This prevents the
+        // tool from feeling broken when users select the circle/shape button and
+        // click instead of dragging a rectangle.
+        const size = 0.08;
+        const aspect = Math.max(0.2, Math.min(5, getImageRect().dW / Math.max(1, getImageRect().dH)));
+        const halfU = size / 2;
+        const halfV = (size * aspect) / 2;
+        u0 = clamp01(drawStart.u - halfU);
+        u1 = clamp01(drawStart.u + halfU);
+        v0 = clamp01(drawStart.v - halfV);
+        v1 = clamp01(drawStart.v + halfV);
+      }
+      if ((u1 - u0) > 0.002 && (v1 - v0) > 0.002) {
         pushHistory();
         appRegions.push(
           makePathRegion(currentPreset, u0, v0, u1, v1, buildBaseRegionProps())
@@ -3625,6 +3750,22 @@ function sliderToEdgeC(s) { return s === 0 ? 0 : Math.pow(10, _EL + (s / 100) * 
 function restCToSlider(v) { if (v === 0) return 0; return Math.max(1, Math.round(((Math.log10(Math.max(v,1e-6)) - _RL) / (_RH - _RL)) * 100)); }
 function sliderToRestC(s) { return s === 0 ? 0 : Math.pow(10, _RL + (s / 100) * (_RH - _RL)); }
 
+// Drag-limit UI is intentionally more restrictive than before.
+// Slider 0..100 maps to actual 0.0%..10.0% of the image's smaller dimension.
+// This makes each slider step equal 0.1% actual drag distance.
+const DRAG_LIMIT_UI_DEFAULT = 40;
+function clampDragLimitUi(v) {
+  const n = Number.isFinite(Number(v)) ? Number(v) : DRAG_LIMIT_UI_DEFAULT;
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+function dragLimitUiToFraction(v) {
+  return clampDragLimitUi(v) / 1000;
+}
+function formatDragLimitUi(v) {
+  const ui = clampDragLimitUi(v);
+  return `${ui} → ${(ui / 10).toFixed(1)}%`;
+}
+
 // Inline rename: dblclick a region label to edit it.
 function attachLabelEditor(spanEl, idx, rerender) {
   spanEl.classList.add('region-label');
@@ -3673,7 +3814,7 @@ function renderRegionsList() {
   appRegions.forEach((reg, idx) => {
     const eVal = edgeCToSlider(reg.edgeC);
     const rVal = restCToSlider(reg.restC);
-    const dVal = reg.maxDragPct ?? 40;
+    const dVal = clampDragLimitUi(reg.maxDragPct ?? DRAG_LIMIT_UI_DEFAULT);
 
     const div = document.createElement('div');
     div.className = 'region-item';
@@ -3702,8 +3843,8 @@ function renderRegionsList() {
         <div class="rslider-row">
           <span class="rslider-label">드래그</span>
           <input type="range" class="r-drag-s" data-idx="${idx}"
-                 min="5" max="100" value="${dVal}" step="5" />
-          <span class="rslider-val r-drag-v">${dVal}%</span>
+                 min="0" max="100" value="${dVal}" step="1" />
+          <span class="rslider-val r-drag-v">${formatDragLimitUi(dVal)}</span>
         </div>
       </div>`;
     regionsList.appendChild(div);
@@ -3761,8 +3902,8 @@ function renderRegionsList() {
     const dragValEl  = div.querySelector('.r-drag-v');
     dragSlider.addEventListener('input', () => {
       const s = parseInt(dragSlider.value);
-      dragValEl.textContent = s + '%';
-      appRegions[idx].maxDragPct = s;
+      dragValEl.textContent = formatDragLimitUi(s);
+      appRegions[idx].maxDragPct = clampDragLimitUi(s);
     });
   });
 }
@@ -3810,7 +3951,7 @@ window.addEventListener('resize', () => {
 // ═══════════════════════════════════════════════
 //  START SIMULATION
 // ═══════════════════════════════════════════════
-document.getElementById('btn-start').addEventListener('click', () => {
+onId('btn-start', 'click', () => {
   if (!loadedImage) return;
   startSimulation(composeMaskedImageCanvas() || loadedImage);
 });
@@ -3824,6 +3965,7 @@ function startSimulation(img) {
   // 파라미터 패널은 닫은 상태로 시작
   document.getElementById('sim-params-panel').style.display   = 'none';
   document.getElementById('btn-params').classList.remove('active');
+  updateAffectOutsideButton();
 
   const W = img.naturalWidth || img.width;
   const H = img.naturalHeight || img.height;
@@ -3868,7 +4010,7 @@ function startSimulation(img) {
   scene3.add(softbody.mesh);
 
   // Grabber — create once, then update properties on subsequent calls
-  const dragPct = parseInt(document.getElementById('drag-limit-slider').value) / 100;
+  const dragPct = dragLimitUiToFraction(document.getElementById('drag-limit-slider')?.value ?? DRAG_LIMIT_UI_DEFAULT);
   if (!grabber) {
     grabber = new Grabber2D(renderer3, camera3, [softbody], worldW, worldH);
   } else {
@@ -3969,6 +4111,25 @@ function loop(now) {
 // ═══════════════════════════════════════════════
 //  SIMULATION PARAMETER PANEL
 // ═══════════════════════════════════════════════
+function updateAffectOutsideButton() {
+  const btn = document.getElementById('btn-affect-outside');
+  if (!btn) return;
+  btn.classList.toggle('active', affectOutsideRegions);
+  btn.textContent = affectOutsideRegions ? '바깥 영향: 켜짐' : '바깥 영향: 꺼짐';
+  btn.title = affectOutsideRegions
+    ? '도형 밖 배경도 같이 잡히고 늘어납니다'
+    : '도형 밖 배경은 원래 위치에 고정됩니다';
+}
+
+function setAffectOutsideRegions(enabled) {
+  affectOutsideRegions = !!enabled;
+  updateAffectOutsideButton();
+  if (softbody) {
+    if (!affectOutsideRegions) softbody.resetOutsideRegionsToRest(appRegions);
+    softbody.refreshCompliance(appRegions);
+  }
+}
+
 function renderSimParamsList() {
   const container = document.getElementById('sim-params-list');
   container.innerHTML = '';
@@ -3980,7 +4141,7 @@ function renderSimParamsList() {
   appRegions.forEach((reg, idx) => {
     const eVal = edgeCToSlider(reg.edgeC);
     const rVal = restCToSlider(reg.restC);
-    const dVal = reg.maxDragPct ?? 40;
+    const dVal = clampDragLimitUi(reg.maxDragPct ?? DRAG_LIMIT_UI_DEFAULT);
     const div = document.createElement('div');
     div.className = 'region-item';
     div.dataset.idx = idx;
@@ -4004,8 +4165,8 @@ function renderSimParamsList() {
         </div>
         <div class="rslider-row">
           <span class="rslider-label">드래그</span>
-          <input type="range" class="r-drag-s" min="5" max="100" value="${dVal}" step="5" />
-          <span class="rslider-val r-drag-v">${dVal}%</span>
+          <input type="range" class="r-drag-s" min="0" max="100" value="${dVal}" step="1" />
+          <span class="rslider-val r-drag-v">${formatDragLimitUi(dVal)}</span>
         </div>
       </div>`;
     container.appendChild(div);
@@ -4037,13 +4198,13 @@ function renderSimParamsList() {
     const dragValEl  = div.querySelector('.r-drag-v');
     dragSlider.addEventListener('input', () => {
       const s = parseInt(dragSlider.value);
-      dragValEl.textContent = s + '%';
-      appRegions[idx].maxDragPct = s;
+      dragValEl.textContent = formatDragLimitUi(s);
+      appRegions[idx].maxDragPct = clampDragLimitUi(s);
     });
   });
 }
 
-document.getElementById('btn-params').addEventListener('click', () => {
+onId('btn-params', 'click', () => {
   const panel  = document.getElementById('sim-params-panel');
   const btn    = document.getElementById('btn-params');
   const isOpen = panel.style.display === 'flex';
@@ -4052,17 +4213,23 @@ document.getElementById('btn-params').addEventListener('click', () => {
     btn.classList.remove('active');
   } else {
     renderSimParamsList();
+    updateAffectOutsideButton();
     panel.style.display = 'flex';
     btn.classList.add('active');
   }
 });
 
-document.getElementById('btn-close-params').addEventListener('click', () => {
+onId('btn-close-params', 'click', () => {
   document.getElementById('sim-params-panel').style.display = 'none';
   document.getElementById('btn-params').classList.remove('active');
 });
 
-document.getElementById('btn-edit-regions').addEventListener('click', () => {
+onId('btn-affect-outside', 'click', () => {
+  setAffectOutsideRegions(!affectOutsideRegions);
+});
+updateAffectOutsideButton();
+
+onId('btn-edit-regions', 'click', () => {
   document.getElementById('canvas-container').style.display   = 'none';
   document.getElementById('sim-hud').style.display            = 'none';
   document.getElementById('region-overlay-sim').style.display = 'none';
@@ -4073,7 +4240,7 @@ document.getElementById('btn-edit-regions').addEventListener('click', () => {
   renderRegionsList();   // 슬라이더 값 최신화
 });
 
-document.getElementById('btn-reset-sim').addEventListener('click', () => {
+onId('btn-reset-sim', 'click', () => {
   if (softbody) softbody.resetToRest();
 });
 
@@ -4091,7 +4258,7 @@ function applyRegionOverlayVisibility() {
     btn.textContent = showRegionOverlay ? '영역 표시' : '영역 숨김';
   }
 }
-document.getElementById('btn-toggle-overlay').addEventListener('click', () => {
+onId('btn-toggle-overlay', 'click', () => {
   showRegionOverlay = !showRegionOverlay;
   applyRegionOverlayVisibility();
 });
@@ -4108,13 +4275,18 @@ window.addEventListener('keydown', e => {
 // Drag-limit slider — live update grabber.maxDrag
 const dragLimitSlider = document.getElementById('drag-limit-slider');
 const dragLimitVal    = document.getElementById('drag-limit-val');
-dragLimitSlider.addEventListener('input', () => {
-  const pct = parseInt(dragLimitSlider.value);
-  dragLimitVal.textContent = pct + '%';
-  if (grabber && grabber.minDim) {
-    grabber.maxDrag = grabber.minDim * (pct / 100);
-  }
-});
+if (dragLimitSlider) {
+  dragLimitSlider.addEventListener('input', () => {
+    const pct = clampDragLimitUi(dragLimitSlider.value);
+    dragLimitSlider.value = pct;
+    if (dragLimitVal) dragLimitVal.textContent = formatDragLimitUi(pct);
+    if (grabber && grabber.minDim) {
+      grabber.maxDrag = grabber.minDim * dragLimitUiToFraction(pct);
+    }
+  });
+} else {
+  console.warn('[elastic-2d] Missing #drag-limit-slider; skipped input listener');
+}
 
 document.querySelectorAll('.hud-btn[data-substeps]').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -4126,7 +4298,7 @@ document.querySelectorAll('.hud-btn[data-substeps]').forEach(btn => {
   });
 });
 
-document.getElementById('btn-reset-editor').addEventListener('click', () => {
+onId('btn-reset-editor', 'click', () => {
   document.getElementById('editor-screen').style.display      = 'none';
   document.getElementById('canvas-container').style.display   = 'none';
   document.getElementById('sim-hud').style.display            = 'none';
@@ -4137,6 +4309,7 @@ document.getElementById('btn-reset-editor').addEventListener('click', () => {
   _revokeIfBlobUrl(loadedImageUrl);
   loadedImageUrl = null; loadedImageDataUrl = null; loadedImageName = null;
   cutoutMask = null; cutoutHasContent = false;
+  setAffectOutsideRegions(false);
   hideCutoutDisplay();
   undoStack.length = 0; redoStack.length = 0;
   renderRegionsList();
@@ -4180,7 +4353,8 @@ function buildCurrentProject() {
     settings: {
       part:        partSelect.value,
       customVal:   parseInt(customSlider.value, 10) || 50,
-      dragPct:     parseInt(document.getElementById('drag-limit-slider')?.value, 10) || 40,
+      dragPct:     clampDragLimitUi(document.getElementById('drag-limit-slider')?.value ?? DRAG_LIMIT_UI_DEFAULT),
+      affectOutside: affectOutsideRegions,
       numSubsteps
     }
   };
@@ -4257,9 +4431,12 @@ function applyProject(project) {
     const dragSlider = document.getElementById('drag-limit-slider');
     const dragValEl  = document.getElementById('drag-limit-val');
     if (dragSlider && typeof s.dragPct === 'number') {
-      dragSlider.value = s.dragPct;
-      if (dragValEl) dragValEl.textContent = s.dragPct + '%';
+      const dragUi = clampDragLimitUi(s.dragPct);
+      dragSlider.value = dragUi;
+      if (dragValEl) dragValEl.textContent = formatDragLimitUi(dragUi);
     }
+    if (typeof s.affectOutside === 'boolean') setAffectOutsideRegions(s.affectOutside);
+    else setAffectOutsideRegions(false);
     if (typeof s.numSubsteps === 'number') numSubsteps = s.numSubsteps;
 
     showEditor(img);
@@ -4272,9 +4449,9 @@ function applyProject(project) {
   img.src = project.image;
 }
 
-document.getElementById('btn-export').addEventListener('click', exportProject);
-document.getElementById('btn-import-editor').addEventListener('click', pickProjectFile);
-document.getElementById('btn-export-html').addEventListener('click', exportStandaloneHtml);
+onId('btn-export', 'click', exportProject);
+onId('btn-import-editor', 'click', pickProjectFile);
+onId('btn-export-html', 'click', exportStandaloneHtml);
 
 // ═══════════════════════════════════════════════
 //  VIEW-ONLY BOOT (URL ?project=… or embedded JSON)
