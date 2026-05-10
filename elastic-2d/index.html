@@ -626,7 +626,7 @@
     <div class="hud-slider-wrap">
       <span>드래그 범위</span>
       <input type="range" id="drag-limit-slider" min="0" max="100" value="40" step="1" />
-      <span class="hud-slider-val" id="drag-limit-val">40 → 4.0%</span>
+      <span class="hud-slider-val" id="drag-limit-val">4.0%</span>
     </div>
   </div>
   <div id="fps-counter">FPS: --</div>
@@ -739,6 +739,7 @@ class SoftBody2D {
     this.vEdgeC = new Float32Array(this.nV);
     this.vRestC = new Float32Array(this.nV);
     this.invMass = new Float32Array(this.nV).fill(1.0);
+    this.outsideLocked = new Uint8Array(this.nV);
     this._applyCompliance(regions);   // sets vEdgeC, vRestC, invMass
 
     // Precompute rest lengths
@@ -833,16 +834,18 @@ class SoftBody2D {
   }
 
   // Internal: write vEdgeC/vRestC/invMass from a regions array.
-  // invMass=0 → rigid (edgeC=0), invMass=1 → normal.
-  // During an active grab some invMasses are 0 for grab-pinning; we
-  // must not clobber those, so refreshCompliance guards against it.
+  // outsideLocked=1 means the vertex belongs to the protected background.
+  // invMass=0 is used only for outside locking or temporary grab-pinning, so
+  // a region's 탄성 slider can be 0 without making the region impossible to grab.
   _applyCompliance(regions) {
     for (let i = 0; i < this.nV; i++) {
-      const { edgeC, restC } = getVertexCompliance(
-        this.imgUV[i*2], this.imgUV[i*2+1], regions);
+      const u = this.imgUV[i*2], v = this.imgUV[i*2+1];
+      const outsideLocked = !affectOutsideRegions && !isInsideAnyRegion(u, v, regions);
+      const { edgeC, restC } = getVertexCompliance(u, v, regions);
       this.vEdgeC[i] = edgeC;
       this.vRestC[i] = restC;
-      this.invMass[i] = (edgeC === 0) ? 0 : 1.0;
+      this.outsideLocked[i] = outsideLocked ? 1 : 0;
+      this.invMass[i] = outsideLocked ? 0 : 1.0;
     }
   }
 
@@ -899,19 +902,19 @@ class SoftBody2D {
     this.grabCurrY   = gy;
     this.grabMaxDrag = maxDrag;
 
-    // If the grab centre lands on a rigid vertex, cancel the grab entirely.
-    // (Otherwise the radius would still pull the soft surrounding area.)
-    let minD2 = Infinity, nearestEdgeC = BG_EDGE_C;
+    // If the grab centre lands on protected background, cancel the grab entirely.
+    // (Otherwise the radius would still pull nearby region vertices.)
+    let minD2 = Infinity, nearestEdgeC = BG_EDGE_C, nearestOutsideLocked = false;
     for (let i = 0; i < this.nV; i++) {
       const dx = this.pos[i*3] - gx, dy = this.pos[i*3+1] - gy;
       const d2 = dx*dx + dy*dy;
-      if (d2 < minD2) { minD2 = d2; nearestEdgeC = this.vEdgeC[i]; }
+      if (d2 < minD2) { minD2 = d2; nearestEdgeC = this.vEdgeC[i]; nearestOutsideLocked = !!this.outsideLocked[i]; }
     }
-    if (nearestEdgeC === 0) return false;   // rigid region — don't grab
+    if (nearestOutsideLocked) return false;   // protected background — don't grab
 
     const r2 = radius * radius;
     for (let i = 0; i < this.nV; i++) {
-      // invMass===0 → rigid (permanently fixed) or grabbed elsewhere → skip
+      // invMass===0 → protected background or grabbed elsewhere → skip
       if (this.invMass[i] === 0) continue;
 
       const dx = this.pos[i*3] - gx, dy = this.pos[i*3+1] - gy;
@@ -926,9 +929,9 @@ class SoftBody2D {
         //   edgeC = BG_EDGE_C  → mult = 1  (기존 그대로)
         //   edgeC > BG         → mult > 1  (더 늘어남)
         //   edgeC < BG         → mult < 1  (덜 늘어남)
-        //   edgeC = 0          → mult = 0  (안 움직임; 기존 강체와 동일)
+        //   edgeC = 0          → mult = 0.35 (아주 뻣뻣하지만 잡히기는 함)
         const stretchMult = this.vEdgeC[i] === 0
-          ? 0
+          ? 0.35
           : Math.min(2.0, Math.sqrt(this.vEdgeC[i] / BG_EDGE_C));
         const w = distW * stretchMult;
         if (w < 0.005) continue;   // 너무 뻣뻣해서 사실상 안 움직임
@@ -1616,8 +1619,8 @@ function isInsideAnyRegion(u, v, regions) {
 
 function getVertexCompliance(u, v, regions) {
   let inside = false;
-  let edgeC = affectOutsideRegions ? BG_EDGE_C : 0;
-  let restC = affectOutsideRegions ? BG_REST_C : 0;
+  let edgeC = BG_EDGE_C;
+  let restC = BG_REST_C;
   for (const r of regions) {
     if (regionContains(r, u, v)) {
       inside = true;
@@ -3762,8 +3765,7 @@ function dragLimitUiToFraction(v) {
   return clampDragLimitUi(v) / 1000;
 }
 function formatDragLimitUi(v) {
-  const ui = clampDragLimitUi(v);
-  return `${ui} → ${(ui / 10).toFixed(1)}%`;
+  return (clampDragLimitUi(v) / 10).toFixed(1) + '%';
 }
 
 // Inline rename: dblclick a region label to edit it.
